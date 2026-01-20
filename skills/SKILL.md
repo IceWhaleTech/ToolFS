@@ -1,6 +1,6 @@
 ---
 name: toolfs
-description: Unified virtual filesystem framework for LLM agents. Provides access to files, memory, RAG, plugins, and snapshots through a single interface. Use this skill when the user requests file operations, memory storage, semantic search, plugin execution, or state management tasks.
+description: Unified virtual filesystem framework for LLM agents. Provides access to files, memory, RAG, skills, and snapshots through a single interface. Use this skill when the user requests file operations, memory storage, semantic search, skill execution, or state management tasks.
 metadata:
   author: toolfs
   version: "1.0.0"
@@ -8,7 +8,7 @@ metadata:
 
 # ToolFS
 
-ToolFS is a unified virtual filesystem framework for LLM agents that provides access to files, memory, RAG systems, plugins, and snapshots through a single `/toolfs` namespace.
+ToolFS is a unified virtual filesystem framework for LLM agents that provides access to files, memory, RAG systems, skills, and snapshots through a single `/toolfs` namespace.
 
 ## Overview
 
@@ -17,7 +17,7 @@ ToolFS integrates multiple data sources and operations into one virtual filesyst
 - **Memory**: Persistent key-value storage for session data and context
 - **RAG**: Semantic search over vector databases for document retrieval  
 - **Filesystem**: Access to mounted local directories
-- **Plugins**: Execute WASM-based plugins mounted to virtual paths
+- **Skills**: Execute WASM-based skills mounted to virtual paths
 - **Snapshots**: Create point-in-time snapshots and restore previous states
 
 All operations respect session isolation, permission control, and audit logging for safe execution in sandboxed environments.
@@ -31,7 +31,7 @@ ToolFS is organized into functional modules. Each module provides specific capab
 | **Memory** | `/toolfs/memory` | Persistent storage for session data and context | [Memory Skill](memory/SKILL.md) |
 | **RAG** | `/toolfs/rag` | Semantic search over vector databases | [RAG Skill](rag/SKILL.md) |
 | **Filesystem** | `/toolfs/<mount>` | Access to mounted local directories | [Filesystem Skill](filesystem/SKILL.md) |
-| **Plugins** | `/toolfs/<plugin>` | Execute WASM-based plugins | [Plugin Skill](plugin/SKILL.md) |
+| **Skills** | `/toolfs/<skill>` | Execute WASM-based skills | [Skill Skill](skill/SKILL.md) |
 | **Snapshots** | `/toolfs/snapshots` | Filesystem state snapshots and rollback | [Snapshot Skill](snapshot/SKILL.md) |
 
 ## Quick Start
@@ -72,13 +72,13 @@ LIST /toolfs/<mount_point>/<relative_path>
 
 See [Filesystem Skill](filesystem/SKILL.md) for details.
 
-### Plugin Execution
+### Skill Execution
 ```bash
-# Execute plugin
-GET /toolfs/<plugin_mount_path>?text=<query>
+# Execute skill
+GET /toolfs/<skill_mount_path>?text=<query>
 ```
 
-See [Plugin Skill](plugin/SKILL.md) for details.
+See [Skill Skill](skill/SKILL.md) for details.
 
 ### Snapshot Management
 ```bash
@@ -126,7 +126,7 @@ Content-Type: application/json
 - **File Operations**: "Read the config file from the project directory"
 - **Memory Persistence**: "Store this conversation summary in memory"
 - **Semantic Search**: "Search documents for information about X"
-- **Plugin Execution**: "Execute the RAG plugin to find relevant content"
+- **Skill Execution**: "Execute the RAG skill to find relevant content"
 - **State Management**: "Create a snapshot before making changes"
 - **Recovery**: "Restore the previous state"
 
@@ -136,8 +136,8 @@ All operations return standardized result structures:
 
 ```json
 {
-  "type": "memory|rag|file|plugin|snapshot",
-  "source": "identifier (ID, path, command, plugin_name)",
+  "type": "memory|rag|file|skill|snapshot",
+  "source": "identifier (ID, path, command, skill_name)",
   "content": "string content or data",
   "metadata": {},
   "success": true|false,
@@ -161,7 +161,7 @@ Errors are returned with structured responses:
 Common error types:
 - `access_denied`: Session does not have permission
 - `not_found`: Resource not found
-- `plugin_error`: Plugin execution failed
+- `skill_error`: Skill execution failed
 - `validation_error`: Invalid input parameters
 - `filesystem_error`: Filesystem operation failed
 
@@ -180,7 +180,7 @@ For detailed information about each module, see:
 - [Memory Skill](memory/SKILL.md) - Persistent storage operations
 - [RAG Skill](rag/SKILL.md) - Semantic search operations
 - [Filesystem Skill](filesystem/SKILL.md) - File and directory operations
-- [Plugin Skill](plugin/SKILL.md) - Plugin execution and management
+- [Skill Skill](skill/SKILL.md) - Skill execution and management
 - [Snapshot Skill](snapshot/SKILL.md) - State management operations
 
 ---

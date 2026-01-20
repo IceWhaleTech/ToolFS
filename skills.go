@@ -11,21 +11,21 @@ import (
 
 // Result represents a structured result from a skill API operation
 type Result struct {
-	Type      string      `json:"type"`                 // "memory", "rag", "file", "cli", "plugin"
-	Source    string      `json:"source"`               // Source identifier (ID, path, command, plugin_name)
+	Type      string      `json:"type"`                 // "memory", "rag", "file", "cli", "code_skill"
+	Source    string      `json:"source"`               // Source identifier (ID, path, command, skill_name)
 	Content   string      `json:"content"`              // The actual content/data
 	Metadata  interface{} `json:"metadata"`             // Additional metadata
 	Success   bool        `json:"success"`              // Operation success status
 	Error     string      `json:"error,omitempty"`      // Error message if failed
 	CLIOutput *CLIOutput  `json:"cli_output,omitempty"` // CLI command output if applicable
-	Plugin    *PluginInfo `json:"plugin,omitempty"`     // Plugin information if applicable
+	Skill    *SkillInfo `json:"skill,omitempty"`     // Skill information if applicable
 }
 
-// PluginInfo contains information about a plugin execution
-type PluginInfo struct {
+// SkillInfo contains information about a skill execution
+type SkillInfo struct {
 	Name    string      `json:"name"`
 	Version string      `json:"version"`
-	Output  interface{} `json:"output,omitempty"` // Plugin output (can be structured)
+	Output  interface{} `json:"output,omitempty"` // Skill output (can be structured)
 }
 
 // CLIOutput represents the output from a CLI command execution
@@ -367,8 +367,8 @@ func ChainOperations(fs *ToolFS, operations []Operation, session *Session) ([]*R
 			}
 		case "execute_cli":
 			result, err = ExecuteCLI(op.Command, op.Args, session, fs)
-		case "execute_plugin":
-			result, err = ExecutePlugin(fs, op.PluginName, op.PluginPath, op.Query, op.PluginData, session)
+		case "execute_code_skill":
+			result, err = ExecuteCodeSkill(fs, op.SkillName, op.SkillPath, op.Query, op.SkillData, session)
 		default:
 			result = &Result{
 				Type:    "error",
@@ -383,25 +383,25 @@ func ChainOperations(fs *ToolFS, operations []Operation, session *Session) ([]*R
 	return results, nil
 }
 
-// ExecutePlugin executes a plugin through ToolFS mount or PluginManager
-func ExecutePlugin(fs *ToolFS, pluginName, pluginPath, query string, pluginData map[string]interface{}, session *Session) (*Result, error) {
-	// If pluginPath is provided, use it directly (plugin is mounted)
-	if pluginPath != "" {
-		return executeMountedPlugin(fs, pluginPath, query, pluginData, session)
+// ExecuteCodeSkill executes a skill through ToolFS mount or SkillManager
+func ExecuteCodeSkill(fs *ToolFS, skillName, skillPath, query string, skillData map[string]interface{}, session *Session) (*Result, error) {
+	// If skillPath is provided, use it directly (skill is mounted)
+	if skillPath != "" {
+		return executeMountedSkill(fs, skillPath, query, skillData, session)
 	}
 
-	// Otherwise, try to use PluginManager
-	if fs.pluginManager == nil {
+	// Otherwise, try to use SkillManager
+	if fs.executorManager == nil {
 		return &Result{
-			Type:    "plugin",
-			Source:  pluginName,
+			Type:    "code_skill",
+			Source:  skillName,
 			Success: false,
-			Error:   "plugin manager not available",
-		}, errors.New("plugin manager not available")
+			Error:   "skill manager not available",
+		}, errors.New("skill manager not available")
 	}
 
-	// Build plugin request
-	request := &PluginRequest{
+	// Build skill request
+	request := &SkillRequest{
 		Operation: "read_file",
 		Data:      make(map[string]interface{}),
 	}
@@ -411,9 +411,9 @@ func ExecutePlugin(fs *ToolFS, pluginName, pluginPath, query string, pluginData 
 		request.Data["input"] = query
 	}
 
-	// Merge pluginData
-	if pluginData != nil {
-		for k, v := range pluginData {
+	// Merge skillData
+	if skillData != nil {
+		for k, v := range skillData {
 			request.Data[k] = v
 		}
 	}
@@ -422,54 +422,54 @@ func ExecutePlugin(fs *ToolFS, pluginName, pluginPath, query string, pluginData 
 	requestBytes, err := json.Marshal(request)
 	if err != nil {
 		return &Result{
-			Type:    "plugin",
-			Source:  pluginName,
+			Type:    "code_skill",
+			Source:  skillName,
 			Success: false,
 			Error:   fmt.Sprintf("failed to marshal request: %v", err),
 		}, err
 	}
 
-	// Execute plugin (returns []byte, not PluginResponse)
-	outputBytes, err := fs.pluginManager.ExecutePlugin(pluginName, requestBytes)
+	// Execute skill (returns []byte, not SkillResponse)
+	outputBytes, err := fs.executorManager.ExecuteSkill(skillName, requestBytes)
 	if err != nil {
 		return &Result{
-			Type:    "plugin",
-			Source:  pluginName,
+			Type:    "code_skill",
+			Source:  skillName,
 			Success: false,
 			Error:   err.Error(),
 		}, err
 	}
 
-	// Parse plugin response
-	var response PluginResponse
+	// Parse skill response
+	var response SkillResponse
 	if err := json.Unmarshal(outputBytes, &response); err != nil {
 		// If not JSON, treat as plain content
-		var pluginInfo *PluginInfo
-		if plugin, err2 := fs.pluginManager.registry.Get(pluginName); err2 == nil {
-			pluginInfo = &PluginInfo{
-				Name:    plugin.Name(),
-				Version: plugin.Version(),
+		var skillInfo *SkillInfo
+		if skill, err2 := fs.executorManager.registry.Get(skillName); err2 == nil {
+			skillInfo = &SkillInfo{
+				Name:    skill.Name(),
+				Version: skill.Version(),
 			}
 		}
 		return &Result{
-			Type:    "plugin",
-			Source:  pluginName,
+			Type:    "code_skill",
+			Source:  skillName,
 			Content: string(outputBytes),
 			Success: true,
-			Plugin:  pluginInfo,
+			Skill:  skillInfo,
 		}, nil
 	}
 
 	if !response.Success {
 		return &Result{
-			Type:    "plugin",
-			Source:  pluginName,
+			Type:    "code_skill",
+			Source:  skillName,
 			Success: false,
 			Error:   response.Error,
 		}, errors.New(response.Error)
 	}
 
-	// Extract content from plugin response
+	// Extract content from skill response
 	content := ""
 	if resultStr, ok := response.Result.(string); ok {
 		content = resultStr
@@ -480,30 +480,30 @@ func ExecutePlugin(fs *ToolFS, pluginName, pluginPath, query string, pluginData 
 		}
 	}
 
-	// Get plugin info if available
-	var pluginInfo *PluginInfo
-	if plugin, err := fs.pluginManager.registry.Get(pluginName); err == nil {
-		pluginInfo = &PluginInfo{
-			Name:    plugin.Name(),
-			Version: plugin.Version(),
+	// Get skill info if available
+	var skillInfo *SkillInfo
+	if skill, err := fs.executorManager.registry.Get(skillName); err == nil {
+		skillInfo = &SkillInfo{
+			Name:    skill.Name(),
+			Version: skill.Version(),
 			Output:  response.Result,
 		}
 	}
 
 	return &Result{
-		Type:     "plugin",
-		Source:   pluginName,
+		Type:     "code_skill",
+		Source:   skillName,
 		Content:  content,
 		Metadata: response.Metadata,
 		Success:  true,
-		Plugin:   pluginInfo,
+		Skill:   skillInfo,
 	}, nil
 }
 
-// executeMountedPlugin executes a plugin mounted to a path
-func executeMountedPlugin(fs *ToolFS, pluginPath, query string, pluginData map[string]interface{}, session *Session) (*Result, error) {
+// executeMountedSkill executes a skill mounted to a path
+func executeMountedSkill(fs *ToolFS, skillPath, query string, skillData map[string]interface{}, session *Session) (*Result, error) {
 	// Build full path with query
-	path := pluginPath
+	path := skillPath
 	if query != "" {
 		if strings.Contains(path, "?") {
 			path += "&text=" + url.QueryEscape(query)
@@ -512,7 +512,7 @@ func executeMountedPlugin(fs *ToolFS, pluginPath, query string, pluginData map[s
 		}
 	}
 
-	// Read from plugin mount
+	// Read from skill mount
 	var data []byte
 	var err error
 	if session != nil {
@@ -523,58 +523,58 @@ func executeMountedPlugin(fs *ToolFS, pluginPath, query string, pluginData map[s
 
 	if err != nil {
 		return &Result{
-			Type:    "plugin",
-			Source:  pluginPath,
+			Type:    "code_skill",
+			Source:  skillPath,
 			Success: false,
 			Error:   err.Error(),
 		}, err
 	}
 
-	// Parse plugin response
-	var pluginResponse PluginResponse
-	if err := json.Unmarshal(data, &pluginResponse); err != nil {
+	// Parse skill response
+	var skillResponse SkillResponse
+	if err := json.Unmarshal(data, &skillResponse); err != nil {
 		// If not JSON, treat as plain content
 		return &Result{
-			Type:    "plugin",
-			Source:  pluginPath,
+			Type:    "code_skill",
+			Source:  skillPath,
 			Content: string(data),
 			Success: true,
 		}, nil
 	}
 
-	if !pluginResponse.Success {
+	if !skillResponse.Success {
 		return &Result{
-			Type:    "plugin",
-			Source:  pluginPath,
+			Type:    "code_skill",
+			Source:  skillPath,
 			Success: false,
-			Error:   pluginResponse.Error,
-		}, errors.New(pluginResponse.Error)
+			Error:   skillResponse.Error,
+		}, errors.New(skillResponse.Error)
 	}
 
 	// Extract content
 	content := ""
-	if resultStr, ok := pluginResponse.Result.(string); ok {
+	if resultStr, ok := skillResponse.Result.(string); ok {
 		content = resultStr
 	} else {
-		contentBytes, _ := json.Marshal(pluginResponse.Result)
+		contentBytes, _ := json.Marshal(skillResponse.Result)
 		content = string(contentBytes)
 	}
 
 	return &Result{
-		Type:     "plugin",
-		Source:   pluginPath,
+		Type:     "code_skill",
+		Source:   skillPath,
 		Content:  content,
-		Metadata: pluginResponse.Metadata,
+		Metadata: skillResponse.Metadata,
 		Success:  true,
 	}, nil
 }
 
-// SearchMemoryAndExecutePlugin combines memory search, RAG lookup, and plugin execution:
+// SearchMemoryAndExecuteSkill combines memory search, RAG lookup, and skill execution:
 // 1. Searches memory for entries matching the query
 // 2. Performs RAG lookup if needed
-// 3. Executes plugin at the specified path with the query
+// 3. Executes skill at the specified path with the query
 // 4. Merges results into a structured JSON response
-func SearchMemoryAndExecutePlugin(fs *ToolFS, query string, pluginPath string, session *Session) (*Result, error) {
+func SearchMemoryAndExecuteSkill(fs *ToolFS, query string, skillPath string, session *Session) (*Result, error) {
 	var allResults []*Result
 
 	// Step 1: Search memory
@@ -604,30 +604,30 @@ func SearchMemoryAndExecutePlugin(fs *ToolFS, query string, pluginPath string, s
 		allResults = append(allResults, ragResult)
 	}
 
-	// Step 3: Execute plugin
-	var pluginResult *Result
-	var pluginErr error
+	// Step 3: Execute skill
+	var skillResult *Result
+	var skillErr error
 
-	if pluginPath != "" {
-		// Extract plugin name from path (e.g., "/toolfs/rag" -> check for mounted plugin)
-		pluginResult, pluginErr = executeMountedPlugin(fs, pluginPath, query, nil, session)
+	if skillPath != "" {
+		// Extract skill name from path (e.g., "/toolfs/rag" -> check for mounted skill)
+		skillResult, skillErr = executeMountedSkill(fs, skillPath, query, nil, session)
 
-		if pluginErr == nil && pluginResult != nil && pluginResult.Success {
-			allResults = append(allResults, pluginResult)
+		if skillErr == nil && skillResult != nil && skillResult.Success {
+			allResults = append(allResults, skillResult)
 		}
 	}
 
 	// Step 4: Merge results
-	return mergeResults(allResults, query, memErr, ragErr, pluginErr)
+	return mergeResults(allResults, query, memErr, ragErr, skillErr)
 }
 
 // mergeResults merges multiple results into a single structured result
-func mergeResults(results []*Result, query string, memErr, ragErr, pluginErr error) (*Result, error) {
+func mergeResults(results []*Result, query string, memErr, ragErr, skillErr error) (*Result, error) {
 	if len(results) == 0 {
 		return &Result{
 			Type:    "error",
 			Success: false,
-			Error:   fmt.Sprintf("no results found: memory=%v, rag=%v, plugin=%v", memErr, ragErr, pluginErr),
+			Error:   fmt.Sprintf("no results found: memory=%v, rag=%v, skill=%v", memErr, ragErr, skillErr),
 		}, errors.New("no results found")
 	}
 
@@ -655,10 +655,10 @@ func mergeResults(results []*Result, query string, memErr, ragErr, pluginErr err
 		if r.Metadata != nil {
 			resultMap["metadata"] = r.Metadata
 		}
-		if r.Plugin != nil {
-			resultMap["plugin"] = map[string]interface{}{
-				"name":    r.Plugin.Name,
-				"version": r.Plugin.Version,
+		if r.Skill != nil {
+			resultMap["code_skill"] = map[string]interface{}{
+				"name":    r.Skill.Name,
+				"version": r.Skill.Version,
 			}
 		}
 
@@ -682,20 +682,20 @@ func mergeResults(results []*Result, query string, memErr, ragErr, pluginErr err
 		Content:  combinedContent,
 		Metadata: mergedMetadata,
 		Success:  true,
-		Plugin:   primary.Plugin,
+		Skill:   primary.Skill,
 	}, nil
 }
 
 // Operation represents a single operation in a chain
 type Operation struct {
-	Type       string                 `json:"type"` // "read_file", "write_file", "list_dir", "search_memory", "search_rag", "execute_cli", "execute_plugin"
+	Type       string                 `json:"type"` // "read_file", "write_file", "list_dir", "search_memory", "search_rag", "execute_cli", "execute_code_skill"
 	Path       string                 `json:"path,omitempty"`
 	Content    string                 `json:"content,omitempty"`
 	Query      string                 `json:"query,omitempty"`
 	TopK       int                    `json:"top_k,omitempty"`
 	Command    string                 `json:"command,omitempty"`
 	Args       []string               `json:"args,omitempty"`
-	PluginName string                 `json:"plugin_name,omitempty"` // For execute_plugin
-	PluginPath string                 `json:"plugin_path,omitempty"` // Plugin mount path
-	PluginData map[string]interface{} `json:"plugin_data,omitempty"` // Data to pass to plugin
+	SkillName string                 `json:"skill_name,omitempty"` // For execute_code_skill
+	SkillPath string                 `json:"skill_path,omitempty"` // Skill mount path
+	SkillData map[string]interface{} `json:"skill_data,omitempty"` // Data to pass to skill
 }

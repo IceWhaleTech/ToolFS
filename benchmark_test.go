@@ -288,25 +288,25 @@ func BenchmarkPathResolution(b *testing.B) {
 	}
 }
 
-// BenchmarkPluginExecute benchmarks plugin execution performance
-func BenchmarkPluginExecute(b *testing.B) {
+// BenchmarkSkillExecute benchmarks skill execution performance
+func BenchmarkSkillExecute(b *testing.B) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
-	session, _ := fs.NewSession("plugin-bench", []string{"/toolfs/rag"})
-	ctx := NewPluginContext(fs, session)
+	session, _ := fs.NewSession("skill-bench", []string{"/toolfs/rag"})
+	ctx := NewSkillContext(fs, session)
 
-	contentPlugin := &ContentPlugin{content: "Plugin response content"}
-	pm.InjectPlugin(contentPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "content-plugin")
+	contentSkill := &ContentSkill{content: "Skill response content"}
+	pm.InjectSkill(contentSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "content-skill")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		path := fmt.Sprintf("/toolfs/rag/test%d", i)
 		_, err := fs.ReadFile(path)
 		if err != nil {
-			b.Fatalf("Plugin read failed: %v", err)
+			b.Fatalf("Skill read failed: %v", err)
 		}
 	}
 }

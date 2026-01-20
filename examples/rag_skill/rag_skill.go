@@ -11,23 +11,23 @@ import (
 // 为了能够在 WASM 中运行，我们不能直接导入 toolfs 包
 // 所以我们需要定义接口和类型
 
-// ToolFSPlugin 是插件必须实现的接口
-type ToolFSPlugin interface {
+// SkillExecutor 是插件必须实现的接口
+type SkillExecutor interface {
 	Name() string
 	Version() string
 	Init(config map[string]interface{}) error
 	Execute(input []byte) ([]byte, error)
 }
 
-// PluginRequest 表示插件执行请求
-type PluginRequest struct {
+// SkillRequest 表示插件执行请求
+type SkillRequest struct {
 	Operation string                 `json:"operation"`
 	Path      string                 `json:"path"`
 	Data      map[string]interface{} `json:"data"`
 }
 
-// PluginResponse 表示插件执行响应
-type PluginResponse struct {
+// SkillResponse 表示插件执行响应
+type SkillResponse struct {
 	Success  bool                   `json:"success"`
 	Result   interface{}            `json:"result,omitempty"`
 	Error    string                 `json:"error,omitempty"`
@@ -36,9 +36,9 @@ type PluginResponse struct {
 
 // Document 表示向量数据库中的文档
 type Document struct {
-	ID      string    `json:"id"`
-	Content string    `json:"content"`
-	Vector  []float32 `json:"vector"`
+	ID       string                 `json:"id"`
+	Content  string                 `json:"content"`
+	Vector   []float32              `json:"vector"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -50,48 +50,48 @@ type SearchResult struct {
 
 // SearchResponse 表示搜索响应
 type SearchResponse struct {
-	Query   string        `json:"query"`
-	TopK    int           `json:"top_k"`
+	Query   string         `json:"query"`
+	TopK    int            `json:"top_k"`
 	Results []SearchResult `json:"results"`
-	Count   int           `json:"count"`
+	Count   int            `json:"count"`
 }
 
-// RAGPlugin 实现 RAG 搜索插件
-type RAGPlugin struct {
+// RAGSkill 实现 RAG 搜索插件
+type RAGSkill struct {
 	name        string
 	version     string
 	vectorDB    *VectorDatabase
 	initialized bool
 }
 
-// NewRAGPlugin 创建新的 RAG 插件实例
-func NewRAGPlugin() *RAGPlugin {
-	return &RAGPlugin{
-		name:    "rag-plugin",
-		version: "1.0.0",
+// NewRAGSkill 创建新的 RAG 插件实例
+func NewRAGSkill() *RAGSkill {
+	return &RAGSkill{
+		name:     "rag-skill",
+		version:  "1.0.0",
 		vectorDB: NewVectorDatabase(),
 	}
 }
 
 // Name 返回插件名称
-func (p *RAGPlugin) Name() string {
+func (p *RAGSkill) Name() string {
 	return p.name
 }
 
 // Version 返回插件版本
-func (p *RAGPlugin) Version() string {
+func (p *RAGSkill) Version() string {
 	return p.version
 }
 
 // Init 初始化插件
-func (p *RAGPlugin) Init(config map[string]interface{}) error {
+func (p *RAGSkill) Init(config map[string]interface{}) error {
 	// 从配置中加载文档数据（如果提供）
 	if docs, ok := config["documents"].([]interface{}); ok {
 		for _, doc := range docs {
 			if docMap, ok := doc.(map[string]interface{}); ok {
 				document := Document{
-					ID:      getString(docMap, "id"),
-					Content: getString(docMap, "content"),
+					ID:       getString(docMap, "id"),
+					Content:  getString(docMap, "content"),
 					Metadata: make(map[string]interface{}),
 				}
 				if metadata, ok := docMap["metadata"].(map[string]interface{}); ok {
@@ -103,27 +103,27 @@ func (p *RAGPlugin) Init(config map[string]interface{}) error {
 			}
 		}
 	}
-	
+
 	// 如果没有提供文档，加载一些默认示例文档
 	if p.vectorDB.Count() == 0 {
 		p.loadDefaultDocuments()
 	}
-	
+
 	p.initialized = true
 	return nil
 }
 
 // Execute 执行插件操作
-func (p *RAGPlugin) Execute(input []byte) ([]byte, error) {
+func (p *RAGSkill) Execute(input []byte) ([]byte, error) {
 	if !p.initialized {
-		return nil, errors.New("plugin not initialized, call Init() first")
+		return nil, errors.New("skill not initialized, call Init() first")
 	}
-	
-	var request PluginRequest
+
+	var request SkillRequest
 	if err := json.Unmarshal(input, &request); err != nil {
 		return p.errorResponse("failed to parse request: " + err.Error()), nil
 	}
-	
+
 	switch request.Operation {
 	case "search", "read_file":
 		return p.handleSearch(request)
@@ -135,11 +135,11 @@ func (p *RAGPlugin) Execute(input []byte) ([]byte, error) {
 }
 
 // handleSearch 处理搜索请求
-func (p *RAGPlugin) handleSearch(request PluginRequest) ([]byte, error) {
+func (p *RAGSkill) handleSearch(request SkillRequest) ([]byte, error) {
 	// 从 Data 中提取查询和 top_k
 	query := ""
 	topK := 5
-	
+
 	if request.Data != nil {
 		if q, ok := request.Data["query"].(string); ok && q != "" {
 			query = q
@@ -153,50 +153,50 @@ func (p *RAGPlugin) handleSearch(request PluginRequest) ([]byte, error) {
 				query = request.Path[idx+3:]
 			}
 		}
-		
+
 		if k, ok := request.Data["top_k"].(float64); ok {
 			topK = int(k)
 		} else if k, ok := request.Data["top_k"].(int); ok {
 			topK = k
 		}
 	}
-	
+
 	if query == "" {
 		return p.errorResponse("query parameter is required"), nil
 	}
-	
+
 	if topK <= 0 {
 		topK = 5
 	}
 	if topK > 100 {
 		topK = 100 // 限制最大 top_k
 	}
-	
+
 	// 执行向量搜索
 	results := p.vectorDB.Search(query, topK)
-	
+
 	response := SearchResponse{
 		Query:   query,
 		TopK:    topK,
 		Results: results,
 		Count:   len(results),
 	}
-	
-	pluginResponse := PluginResponse{
+
+	skillResponse := SkillResponse{
 		Success: true,
 		Result:  response,
 		Metadata: map[string]interface{}{
-			"plugin_name":    p.name,
-			"plugin_version": p.version,
+			"skill_name":    p.name,
+			"skill_version": p.version,
 		},
 	}
-	
-	return json.Marshal(pluginResponse)
+
+	return json.Marshal(skillResponse)
 }
 
 // handleListDir 处理目录列表请求
-func (p *RAGPlugin) handleListDir() ([]byte, error) {
-	response := PluginResponse{
+func (p *RAGSkill) handleListDir() ([]byte, error) {
+	response := SkillResponse{
 		Success: true,
 		Result: map[string]interface{}{
 			"entries": []string{"query", "search"},
@@ -205,9 +205,29 @@ func (p *RAGPlugin) handleListDir() ([]byte, error) {
 	return json.Marshal(response)
 }
 
+// GetSkillDocument 实现 SkillDocumentProvider 接口
+func (p *RAGSkill) GetSkillDocument() string {
+	return `---
+name: rag-skill
+description: 自定义 RAG 搜索插件。当用户需要从特定文档库中检索信息、执行语义搜索或回答基于知识库的问题时使用此技能，例如：“在文档库中搜索 X”、“基于知识库回答这个问题” 或 “寻找与 Y 相关的参考资料”。
+version: 1.0.0
+---
+
+# RAG Skill
+
+这是一个自定义的 RAG (检索增强生成) 插件，演示了如何在 ToolFS 中实现语义搜索功能。
+
+## 功能
+
+- 向量搜索
+- 文档检索
+- 简单的语义匹配
+`
+}
+
 // errorResponse 创建错误响应
-func (p *RAGPlugin) errorResponse(message string) []byte {
-	response := PluginResponse{
+func (p *RAGSkill) errorResponse(message string) []byte {
+	response := SkillResponse{
 		Success: false,
 		Error:   message,
 	}
@@ -217,34 +237,34 @@ func (p *RAGPlugin) errorResponse(message string) []byte {
 
 // generateVector 为文本生成简单的向量表示（模拟嵌入）
 // 在实际应用中，应该使用真正的嵌入模型（如 OpenAI, Sentence-BERT 等）
-func (p *RAGPlugin) generateVector(text string) []float32 {
+func (p *RAGSkill) generateVector(text string) []float32 {
 	// 简单的基于字符频率的向量生成（仅用于演示）
 	// 实际应该使用真实的嵌入模型
 	vector := make([]float32, 128)
 	text = strings.ToLower(text)
-	
+
 	for i := 0; i < len(vector) && i < len(text); i++ {
 		vector[i] = float32(text[i%len(text)]) / 255.0
 	}
-	
+
 	// 归一化向量
 	magnitude := float32(0)
 	for _, v := range vector {
 		magnitude += v * v
 	}
 	magnitude = float32(math.Sqrt(float64(magnitude)))
-	
+
 	if magnitude > 0 {
 		for i := range vector {
 			vector[i] /= magnitude
 		}
 	}
-	
+
 	return vector
 }
 
 // loadDefaultDocuments 加载默认示例文档
-func (p *RAGPlugin) loadDefaultDocuments() {
+func (p *RAGSkill) loadDefaultDocuments() {
 	defaultDocs := []Document{
 		{
 			ID:      "doc1",
@@ -256,10 +276,10 @@ func (p *RAGPlugin) loadDefaultDocuments() {
 		},
 		{
 			ID:      "doc2",
-			Content: "Plugins in ToolFS can be written in Go and compiled to WASM for sandboxed execution.",
+			Content: "Skills in ToolFS can be written in Go and compiled to WASM for sandboxed execution.",
 			Metadata: map[string]interface{}{
 				"source": "documentation",
-				"topic":  "plugins",
+				"topic":  "skills",
 			},
 		},
 		{
@@ -287,7 +307,7 @@ func (p *RAGPlugin) loadDefaultDocuments() {
 			},
 		},
 	}
-	
+
 	for _, doc := range defaultDocs {
 		doc.Vector = p.generateVector(doc.Content)
 		p.vectorDB.AddDocument(doc)
@@ -303,5 +323,4 @@ func getString(m map[string]interface{}, key string) string {
 }
 
 // 导出插件实例（用于 WASM 导出）
-var PluginInstance ToolFSPlugin = NewRAGPlugin()
-
+var SkillInstance SkillExecutor = NewRAGSkill()

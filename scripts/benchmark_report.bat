@@ -91,7 +91,7 @@ echo 测试其他操作性能...
     echo.
 ) >> %REPORT_FILE%
 go test -bench=^BenchmarkPathResolution$ -benchmem -benchtime=3s ./... >> %REPORT_FILE% 2>&1
-go test -bench=^BenchmarkPluginExecute$ -benchmem -benchtime=3s ./... >> %REPORT_FILE% 2>&1
+go test -bench=^BenchmarkSkillExecute$ -benchmem -benchtime=3s ./... >> %REPORT_FILE% 2>&1
 go test -bench=^BenchmarkSessionAccessControl$ -benchmem -benchtime=3s ./... >> %REPORT_FILE% 2>&1
 go test -bench=^BenchmarkConcurrentReads$ -benchmem -benchtime=3s ./... >> %REPORT_FILE% 2>&1
 

@@ -33,26 +33,26 @@ Semantic search over vector databases for document retrieval. RAG (Retrieval-Aug
 
 **Example:**
 ```json
-GET /toolfs/rag/query?text=ToolFS%20plugin%20architecture&top_k=3
+GET /toolfs/rag/query?text=ToolFS%20skill%20architecture&top_k=3
 
 // Response
 {
-  "query": "ToolFS plugin architecture",
+  "query": "ToolFS skill architecture",
   "top_k": 3,
   "results": [
     {
       "id": "doc-001",
-      "content": "ToolFS provides a plugin system that supports WASM modules for sandboxed execution. Plugins can be mounted to virtual paths and executed through the Skill API.",
+      "content": "ToolFS provides a skill system that supports WASM modules for sandboxed execution. Skills can be mounted to virtual paths and executed through the Skill API.",
       "score": 0.95,
       "metadata": {
         "source": "documentation",
-        "section": "plugins",
-        "title": "Plugin System Overview"
+        "section": "skills",
+        "title": "Skill System Overview"
       }
     },
     {
       "id": "doc-002",
-      "content": "The plugin architecture allows mounting custom handlers to virtual paths, enabling extensible functionality within the ToolFS framework.",
+      "content": "The skill architecture allows mounting custom handlers to virtual paths, enabling extensible functionality within the ToolFS framework.",
       "score": 0.87,
       "metadata": {
         "source": "documentation",
@@ -62,7 +62,7 @@ GET /toolfs/rag/query?text=ToolFS%20plugin%20architecture&top_k=3
     },
     {
       "id": "doc-003",
-      "content": "WASM plugins are executed in a sandboxed environment with resource limits and security constraints to ensure safe operation.",
+      "content": "WASM skills are executed in a sandboxed environment with resource limits and security constraints to ensure safe operation.",
       "score": 0.82,
       "metadata": {
         "source": "documentation",
@@ -84,7 +84,7 @@ Use RAG skill when you need to:
 - **Document Discovery**: Discover related content across a corpus
 
 Common use cases:
-- "Search for information about ToolFS plugins"
+- "Search for information about ToolFS skills"
 - "Find documents related to vector databases"
 - "Query the knowledge base for best practices"
 - "Find relevant documentation about RAG systems"
@@ -130,23 +130,23 @@ When presenting RAG search results:
 ```
 ✓ RAG search completed
 
-Query: ToolFS plugin architecture
+Query: ToolFS skill architecture
 Results: 3 matches found
 
 1. doc-001 (score: 0.95)
-   Source: documentation > plugins
-   Title: Plugin System Overview
-   Content: ToolFS provides a plugin system that supports WASM modules...
+   Source: documentation > skills
+   Title: Skill System Overview
+   Content: ToolFS provides a skill system that supports WASM modules...
 
 2. doc-002 (score: 0.87)
    Source: documentation > architecture
    Title: Architecture Design
-   Content: The plugin architecture allows mounting custom handlers...
+   Content: The skill architecture allows mounting custom handlers...
 
 3. doc-003 (score: 0.82)
    Source: documentation > sandboxing
    Title: Security Model
-   Content: WASM plugins are executed in a sandboxed environment...
+   Content: WASM skills are executed in a sandboxed environment...
 ```
 
 ## Troubleshooting

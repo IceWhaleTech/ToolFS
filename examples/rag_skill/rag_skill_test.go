@@ -5,17 +5,17 @@ import (
 	"testing"
 )
 
-func TestRAGPlugin_Execute_Search(t *testing.T) {
-	plugin := NewRAGPlugin()
+func TestRAGSkill_Execute_Search(t *testing.T) {
+	skill := NewRAGSkill()
 	
 	// 初始化插件
-	err := plugin.Init(nil)
+	err := skill.Init(nil)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 	
 	// 创建搜索请求
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "search",
 		Data: map[string]interface{}{
 			"query": "ToolFS virtual filesystem",
@@ -29,13 +29,13 @@ func TestRAGPlugin_Execute_Search(t *testing.T) {
 	}
 	
 	// 执行插件
-	output, err := plugin.Execute(input)
+	output, err := skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	
 	// 解析响应
-	var response PluginResponse
+	var response SkillResponse
 	if err := json.Unmarshal(output, &response); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
@@ -96,25 +96,25 @@ func TestRAGPlugin_Execute_Search(t *testing.T) {
 	}
 }
 
-func TestRAGPlugin_Execute_SearchWithPath(t *testing.T) {
-	plugin := NewRAGPlugin()
-	plugin.Init(nil)
+func TestRAGSkill_Execute_SearchWithPath(t *testing.T) {
+	skill := NewRAGSkill()
+	skill.Init(nil)
 	
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "read_file",
-		Path:      "/toolfs/rag/query?text=plugins+WASM",
+		Path:      "/toolfs/rag/query?text=skills+WASM",
 		Data: map[string]interface{}{
 			"top_k": 2,
 		},
 	}
 	
 	input, _ := json.Marshal(request)
-	output, err := plugin.Execute(input)
+	output, err := skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	
-	var response PluginResponse
+	var response SkillResponse
 	json.Unmarshal(output, &response)
 	
 	if !response.Success {
@@ -122,21 +122,21 @@ func TestRAGPlugin_Execute_SearchWithPath(t *testing.T) {
 	}
 }
 
-func TestRAGPlugin_Execute_ListDir(t *testing.T) {
-	plugin := NewRAGPlugin()
-	plugin.Init(nil)
+func TestRAGSkill_Execute_ListDir(t *testing.T) {
+	skill := NewRAGSkill()
+	skill.Init(nil)
 	
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "list_dir",
 	}
 	
 	input, _ := json.Marshal(request)
-	output, err := plugin.Execute(input)
+	output, err := skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	
-	var response PluginResponse
+	var response SkillResponse
 	json.Unmarshal(output, &response)
 	
 	if !response.Success {
@@ -152,21 +152,21 @@ func TestRAGPlugin_Execute_ListDir(t *testing.T) {
 	}
 }
 
-func TestRAGPlugin_Execute_InvalidOperation(t *testing.T) {
-	plugin := NewRAGPlugin()
-	plugin.Init(nil)
+func TestRAGSkill_Execute_InvalidOperation(t *testing.T) {
+	skill := NewRAGSkill()
+	skill.Init(nil)
 	
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "invalid_operation",
 	}
 	
 	input, _ := json.Marshal(request)
-	output, err := plugin.Execute(input)
+	output, err := skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute should not return error: %v", err)
 	}
 	
-	var response PluginResponse
+	var response SkillResponse
 	json.Unmarshal(output, &response)
 	
 	if response.Success {
@@ -178,11 +178,11 @@ func TestRAGPlugin_Execute_InvalidOperation(t *testing.T) {
 	}
 }
 
-func TestRAGPlugin_Execute_MissingQuery(t *testing.T) {
-	plugin := NewRAGPlugin()
-	plugin.Init(nil)
+func TestRAGSkill_Execute_MissingQuery(t *testing.T) {
+	skill := NewRAGSkill()
+	skill.Init(nil)
 	
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "search",
 		Data: map[string]interface{}{
 			"top_k": 3,
@@ -190,12 +190,12 @@ func TestRAGPlugin_Execute_MissingQuery(t *testing.T) {
 	}
 	
 	input, _ := json.Marshal(request)
-	output, err := plugin.Execute(input)
+	output, err := skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute should not return error: %v", err)
 	}
 	
-	var response PluginResponse
+	var response SkillResponse
 	json.Unmarshal(output, &response)
 	
 	if response.Success {
@@ -203,8 +203,8 @@ func TestRAGPlugin_Execute_MissingQuery(t *testing.T) {
 	}
 }
 
-func TestRAGPlugin_Init_WithDocuments(t *testing.T) {
-	plugin := NewRAGPlugin()
+func TestRAGSkill_Init_WithDocuments(t *testing.T) {
+	skill := NewRAGSkill()
 	
 	config := map[string]interface{}{
 		"documents": []interface{}{
@@ -225,18 +225,18 @@ func TestRAGPlugin_Init_WithDocuments(t *testing.T) {
 		},
 	}
 	
-	err := plugin.Init(config)
+	err := skill.Init(config)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 	
 	// 验证文档已加载
-	if plugin.vectorDB.Count() != 2 {
-		t.Errorf("Expected 2 documents, got %d", plugin.vectorDB.Count())
+	if skill.vectorDB.Count() != 2 {
+		t.Errorf("Expected 2 documents, got %d", skill.vectorDB.Count())
 	}
 	
 	// 测试搜索
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "search",
 		Data: map[string]interface{}{
 			"query": "AI",
@@ -245,12 +245,12 @@ func TestRAGPlugin_Init_WithDocuments(t *testing.T) {
 	}
 	
 	input, _ := json.Marshal(request)
-	output, err := plugin.Execute(input)
+	output, err := skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	
-	var response PluginResponse
+	var response SkillResponse
 	json.Unmarshal(output, &response)
 	
 	if !response.Success {
@@ -265,11 +265,11 @@ func TestRAGPlugin_Init_WithDocuments(t *testing.T) {
 	}
 }
 
-func TestRAGPlugin_Execute_NotInitialized(t *testing.T) {
-	plugin := NewRAGPlugin()
+func TestRAGSkill_Execute_NotInitialized(t *testing.T) {
+	skill := NewRAGSkill()
 	// 不调用 Init()
 	
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "search",
 		Data: map[string]interface{}{
 			"query": "test",
@@ -277,10 +277,10 @@ func TestRAGPlugin_Execute_NotInitialized(t *testing.T) {
 	}
 	
 	input, _ := json.Marshal(request)
-	_, err := plugin.Execute(input)
+	_, err := skill.Execute(input)
 	
 	if err == nil {
-		t.Error("Expected error for uninitialized plugin")
+		t.Error("Expected error for uninitialized skill")
 	}
 }
 
@@ -294,8 +294,8 @@ func TestVectorDatabase_Search(t *testing.T) {
 	}
 	doc2 := Document{
 		ID:      "2",
-		Content: "WASM plugins are secure",
-		Vector:  generateQueryVector("WASM plugins are secure"),
+		Content: "WASM skills are secure",
+		Vector:  generateQueryVector("WASM skills are secure"),
 	}
 	
 	db.AddDocument(doc1)

@@ -20,34 +20,34 @@ type SkillDocument struct {
 	Path        string                 `json:"path"` // File path for reference
 }
 
-// SkillDocumentManager manages skill documents from plugins and filesystem
+// SkillDocumentManager manages skill documents from executors and filesystem
 type SkillDocumentManager struct {
-	documents map[string]*SkillDocument // plugin name or path -> document
-	plugins   map[string]ToolFSPlugin  // plugin name -> plugin
+	documents map[string]*SkillDocument // executor name or path -> document
+	executors map[string]SkillExecutor  // executor name -> executor
 }
 
 // NewSkillDocumentManager creates a new skill document manager
 func NewSkillDocumentManager() *SkillDocumentManager {
 	return &SkillDocumentManager{
 		documents: make(map[string]*SkillDocument),
-		plugins:   make(map[string]ToolFSPlugin),
+		executors: make(map[string]SkillExecutor),
 	}
 }
 
-// RegisterPlugin registers a plugin and extracts its skill document if available
-func (sdm *SkillDocumentManager) RegisterPlugin(plugin ToolFSPlugin) error {
-	name := plugin.Name()
-	sdm.plugins[name] = plugin
+// RegisterExecutor registers an executor and extracts its skill document if available
+func (sdm *SkillDocumentManager) RegisterExecutor(executor SkillExecutor) error {
+	name := executor.Name()
+	sdm.executors[name] = executor
 
-	// Check if plugin implements SkillDocumentProvider
-	if provider, ok := plugin.(SkillDocumentProvider); ok {
+	// Check if executor implements SkillDocumentProvider
+	if provider, ok := executor.(SkillDocumentProvider); ok {
 		content := provider.GetSkillDocument()
 		if content != "" {
 			doc, err := sdm.parseSkillDocument(content)
 			if err != nil {
-				return fmt.Errorf("failed to parse skill document for plugin %s: %w", name, err)
+				return fmt.Errorf("failed to parse skill document for skill %s: %w", name, err)
 			}
-			doc.Path = fmt.Sprintf("plugin:%s", name)
+			doc.Path = fmt.Sprintf("skill:%s", name)
 			sdm.documents[name] = doc
 		}
 	}
@@ -70,7 +70,7 @@ func (sdm *SkillDocumentManager) RegisterDocument(path string, content string) e
 	return nil
 }
 
-// GetDocument retrieves a skill document by plugin name or path key
+// GetDocument retrieves a skill document by skill name or path key
 func (sdm *SkillDocumentManager) GetDocument(key string) (*SkillDocument, error) {
 	doc, exists := sdm.documents[key]
 	if !exists {
@@ -151,7 +151,7 @@ func (sdm *SkillDocumentManager) parseSkillDocument(content string) (*SkillDocum
 				if len(parts) == 2 {
 					key := strings.TrimSpace(parts[0])
 					value := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
-					
+
 					switch key {
 					case "name":
 						doc.Name = value
@@ -185,4 +185,3 @@ func (sdm *SkillDocumentManager) parseSkillDocument(content string) (*SkillDocum
 
 	return doc, nil
 }
-

@@ -180,7 +180,7 @@ echo -e "${YELLOW}测试其他操作性能...${NC}"
     echo "#### 插件执行性能"
     echo ""
     echo '```'
-    go test -bench=^BenchmarkPluginExecute$ -benchmem -benchtime=3s ./... | tee -a /dev/stderr | grep -E "(Benchmark|PASS|ok)"
+    go test -bench=^BenchmarkSkillExecute$ -benchmem -benchtime=3s ./... | tee -a /dev/stderr | grep -E "(Benchmark|PASS|ok)"
     echo '```'
     echo ""
 } >> "$REPORT_FILE" 2>&1

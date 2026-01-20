@@ -6,14 +6,14 @@
 
 **Linux/Mac:**
 ```bash
-cd examples/rag_plugin
+cd examples/rag_skill
 chmod +x build.sh
 ./build.sh
 ```
 
 **Windows:**
 ```cmd
-cd examples\rag_plugin
+cd examples\rag_skill
 build.bat
 ```
 
@@ -25,8 +25,8 @@ go test -v
 
 应该看到所有测试通过：
 ```
-=== RUN   TestRAGPlugin_Execute_Search
---- PASS: TestRAGPlugin_Execute_Search (0.00s)
+=== RUN   TestRAGSkill_Execute_Search
+--- PASS: TestRAGSkill_Execute_Search (0.00s)
 ...
 PASS
 ```
@@ -39,24 +39,24 @@ package main
 import (
     "fmt"
     "github.com/IceWhaleTech/toolfs"
-    rag_plugin "github.com/IceWhaleTech/toolfs/examples/rag_plugin"
+    rag_skill "github.com/IceWhaleTech/toolfs/examples/rag_skill"
 )
 
 func main() {
     // 创建 ToolFS
     fs := toolfs.NewToolFS("/toolfs")
-    pm := toolfs.NewPluginManager()
-    fs.SetPluginManager(pm)
+    pm := toolfs.NewSkillExecutorManager()
+    fs.SetSkillExecutorManager(pm)
     
     // 创建并注入插件
-    plugin := rag_plugin.NewRAGPlugin()
-    plugin.Init(nil) // 使用默认文档
+    skill := rag_skill.NewRAGSkill()
+    skill.Init(nil) // 使用默认文档
     
-    ctx := toolfs.NewPluginContext(fs, nil)
-    pm.InjectPlugin(plugin, ctx, nil)
+    ctx := toolfs.NewSkillContext(fs, nil)
+    pm.InjectSkill(skill, ctx, nil)
     
     // 挂载插件
-    fs.MountPlugin("/toolfs/rag", "rag-plugin")
+    fs.MountSkill("/toolfs/rag", "rag-skill")
     
     // 搜索
     data, _ := fs.ReadFile("/toolfs/rag/query?text=ToolFS")
@@ -69,7 +69,7 @@ func main() {
 ### 单元测试
 
 ```bash
-go test -v -run TestRAGPlugin_Execute_Search
+go test -v -run TestRAGSkill_Execute_Search
 ```
 
 ### 集成测试
@@ -95,8 +95,8 @@ go build -o rag.wasm .
 ## 添加自定义文档
 
 ```go
-plugin := rag_plugin.NewRAGPlugin()
-plugin.Init(map[string]interface{}{
+skill := rag_skill.NewRAGSkill()
+skill.Init(map[string]interface{}{
     "documents": []interface{}{
         map[string]interface{}{
             "id":      "my-doc-1",

@@ -45,7 +45,7 @@ func TestNormalizeMountPoint(t *testing.T) {
 		{"/toolfs/memory", "memory"},
 		{"/toolfs/rag", "rag"},
 		{"/toolfs", ""},
-		{"/toolfs/plugins/myplugin", "plugins"},
+		{"/toolfs/skills/myskill", "skills"},
 	}
 	
 	for _, tt := range tests {

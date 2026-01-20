@@ -9,22 +9,22 @@ import (
 	"time"
 )
 
-// ExamplePlugin is a simple example plugin implementation.
-type ExamplePlugin struct {
+// ExampleSkill is a simple example skill implementation.
+type ExampleSkill struct {
 	name    string
 	version string
 	config  map[string]interface{}
 }
 
-func (p *ExamplePlugin) Name() string {
+func (p *ExampleSkill) Name() string {
 	return p.name
 }
 
-func (p *ExamplePlugin) Version() string {
+func (p *ExampleSkill) Version() string {
 	return p.version
 }
 
-func (p *ExamplePlugin) Init(config map[string]interface{}) error {
+func (p *ExampleSkill) Init(config map[string]interface{}) error {
 	p.config = config
 	// Validate required configuration
 	if timeout, ok := config["timeout"].(float64); ok {
@@ -35,16 +35,16 @@ func (p *ExamplePlugin) Init(config map[string]interface{}) error {
 	return nil
 }
 
-func (p *ExamplePlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *ExampleSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	if err := json.Unmarshal(input, &request); err != nil {
 		return nil, err
 	}
 
-	response := PluginResponse{
+	response := SkillResponse{
 		Success: true,
 		Result: map[string]interface{}{
-			"plugin":    p.name,
+			"code":    p.name,
 			"version":   p.version,
 			"operation": request.Operation,
 			"path":      request.Path,
@@ -54,21 +54,21 @@ func (p *ExamplePlugin) Execute(input []byte) ([]byte, error) {
 	return json.Marshal(response)
 }
 
-// FileProcessorPlugin is an example plugin that processes files from ToolFS.
-type FileProcessorPlugin struct {
-	context *PluginContext
+// FileProcessorSkill is an example skill that processes files from ToolFS.
+type FileProcessorSkill struct {
+	context *SkillContext
 	config  map[string]interface{}
 }
 
-func (p *FileProcessorPlugin) Name() string {
+func (p *FileProcessorSkill) Name() string {
 	return "file-processor"
 }
 
-func (p *FileProcessorPlugin) Version() string {
+func (p *FileProcessorSkill) Version() string {
 	return "1.0.0"
 }
 
-func (p *FileProcessorPlugin) Init(config map[string]interface{}) error {
+func (p *FileProcessorSkill) Init(config map[string]interface{}) error {
 	p.config = config
 
 	// Validate allowed paths if provided
@@ -83,8 +83,8 @@ func (p *FileProcessorPlugin) Init(config map[string]interface{}) error {
 	return nil
 }
 
-func (p *FileProcessorPlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *FileProcessorSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	if err := json.Unmarshal(input, &request); err != nil {
 		return nil, err
 	}
@@ -109,9 +109,9 @@ func (p *FileProcessorPlugin) Execute(input []byte) ([]byte, error) {
 			}
 		}
 
-		// Read file using plugin context
+		// Read file using skill context
 		if p.context == nil {
-			return nil, errors.New("plugin context not available")
+			return nil, errors.New("skill context not available")
 		}
 
 		data, err := p.context.ReadFile(request.Path)
@@ -125,7 +125,7 @@ func (p *FileProcessorPlugin) Execute(input []byte) ([]byte, error) {
 			processed = processed[:100] + "... (truncated)"
 		}
 
-		response := PluginResponse{
+		response := SkillResponse{
 			Success: true,
 			Result: map[string]interface{}{
 				"original_size": len(data),
@@ -142,7 +142,7 @@ func (p *FileProcessorPlugin) Execute(input []byte) ([]byte, error) {
 		}
 
 		if p.context == nil {
-			return nil, errors.New("plugin context not available")
+			return nil, errors.New("skill context not available")
 		}
 
 		entries, err := p.context.ListDir(request.Path)
@@ -150,7 +150,7 @@ func (p *FileProcessorPlugin) Execute(input []byte) ([]byte, error) {
 			return nil, err
 		}
 
-		response := PluginResponse{
+		response := SkillResponse{
 			Success: true,
 			Result: map[string]interface{}{
 				"path":    request.Path,
@@ -166,58 +166,58 @@ func (p *FileProcessorPlugin) Execute(input []byte) ([]byte, error) {
 	}
 }
 
-// ErrorPlugin is an example plugin that returns errors for testing.
-type ErrorPlugin struct {
+// ErrorSkill is an example skill that returns errors for testing.
+type ErrorSkill struct {
 	initError    error
 	executeError error
 }
 
-func (p *ErrorPlugin) Name() string {
-	return "error-plugin"
+func (p *ErrorSkill) Name() string {
+	return "error-skill"
 }
 
-func (p *ErrorPlugin) Version() string {
+func (p *ErrorSkill) Version() string {
 	return "1.0.0"
 }
 
-func (p *ErrorPlugin) Init(config map[string]interface{}) error {
+func (p *ErrorSkill) Init(config map[string]interface{}) error {
 	return p.initError
 }
 
-func (p *ErrorPlugin) Execute(input []byte) ([]byte, error) {
+func (p *ErrorSkill) Execute(input []byte) ([]byte, error) {
 	if p.executeError != nil {
 		return nil, p.executeError
 	}
 
-	response := PluginResponse{
+	response := SkillResponse{
 		Success: false,
-		Error:   "plugin execution error",
+		Error:   "skill execution error",
 	}
 
 	return json.Marshal(response)
 }
 
-func TestToolFSPluginInterface(t *testing.T) {
-	// Test that ExamplePlugin implements ToolFSPlugin interface
-	var _ ToolFSPlugin = (*ExamplePlugin)(nil)
+func TestSkillExecutorInterface(t *testing.T) {
+	// Test that ExampleSkill implements SkillExecutor interface
+	var _ SkillExecutor = (*ExampleSkill)(nil)
 
-	plugin := &ExamplePlugin{
-		name:    "test-plugin",
+	skill := &ExampleSkill{
+		name:    "test-skill",
 		version: "1.0.0",
 	}
 
 	// Test Name()
-	if plugin.Name() != "test-plugin" {
-		t.Errorf("Expected name 'test-plugin', got '%s'", plugin.Name())
+	if skill.Name() != "test-skill" {
+		t.Errorf("Expected name 'test-skill', got '%s'", skill.Name())
 	}
 
 	// Test Version()
-	if plugin.Version() != "1.0.0" {
-		t.Errorf("Expected version '1.0.0', got '%s'", plugin.Version())
+	if skill.Version() != "1.0.0" {
+		t.Errorf("Expected version '1.0.0', got '%s'", skill.Version())
 	}
 
 	// Test Init()
-	err := plugin.Init(map[string]interface{}{
+	err := skill.Init(map[string]interface{}{
 		"timeout": 30.0,
 	})
 	if err != nil {
@@ -225,7 +225,7 @@ func TestToolFSPluginInterface(t *testing.T) {
 	}
 
 	// Test Init() with invalid config
-	err = plugin.Init(map[string]interface{}{
+	err = skill.Init(map[string]interface{}{
 		"timeout": -1.0,
 	})
 	if err == nil {
@@ -233,18 +233,18 @@ func TestToolFSPluginInterface(t *testing.T) {
 	}
 
 	// Test Execute()
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "test",
 		Path:      "/toolfs/data/test.txt",
 	}
 	input, _ := json.Marshal(request)
 
-	output, err := plugin.Execute(input)
+	output, err := skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	var response PluginResponse
+	var response SkillResponse
 	if err := json.Unmarshal(output, &response); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
@@ -263,60 +263,60 @@ func TestToolFSPluginInterface(t *testing.T) {
 	}
 }
 
-func TestPluginRegistry(t *testing.T) {
-	registry := NewPluginRegistry()
+func TestSkillExecutorRegistry(t *testing.T) {
+	registry := NewSkillExecutorRegistry()
 
 	// Test Register()
-	plugin1 := &ExamplePlugin{name: "plugin1", version: "1.0.0"}
-	err := registry.Register(plugin1, nil)
+	skill1 := &ExampleSkill{name: "skill1", version: "1.0.0"}
+	err := registry.Register(skill1, nil)
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
 
 	// Test duplicate registration
-	err = registry.Register(plugin1, nil)
+	err = registry.Register(skill1, nil)
 	if err == nil {
 		t.Error("Expected error for duplicate registration")
 	}
 
 	// Test Get()
-	retrieved, err := registry.Get("plugin1")
+	retrieved, err := registry.Get("skill1")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
 
-	if retrieved.Name() != "plugin1" {
-		t.Errorf("Expected plugin name 'plugin1', got '%s'", retrieved.Name())
+	if retrieved.Name() != "skill1" {
+		t.Errorf("Expected skill name 'skill1', got '%s'", retrieved.Name())
 	}
 
 	// Test Get() non-existent
 	_, err = registry.Get("nonexistent")
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 
 	// Test List()
-	plugin2 := &ExamplePlugin{name: "plugin2", version: "1.0.0"}
-	registry.Register(plugin2, nil)
+	skill2 := &ExampleSkill{name: "skill2", version: "1.0.0"}
+	registry.Register(skill2, nil)
 
 	list := registry.List()
 	if len(list) != 2 {
-		t.Errorf("Expected 2 plugins, got %d", len(list))
+		t.Errorf("Expected 2 skills, got %d", len(list))
 	}
 
 	// Test Unregister()
-	registry.Unregister("plugin1")
+	registry.Unregister("skill1")
 	list = registry.List()
 	if len(list) != 1 {
-		t.Errorf("Expected 1 plugin after unregister, got %d", len(list))
+		t.Errorf("Expected 1 skill after unregister, got %d", len(list))
 	}
 
-	if list[0] != "plugin2" {
-		t.Errorf("Expected remaining plugin 'plugin2', got '%s'", list[0])
+	if list[0] != "skill2" {
+		t.Errorf("Expected remaining skill 'skill2', got '%s'", list[0])
 	}
 }
 
-func TestPluginContext(t *testing.T) {
+func TestSkillContext(t *testing.T) {
 	fs := NewToolFS("/toolfs")
 	tmpDir, cleanup := setupTestDir(t)
 	defer cleanup()
@@ -326,12 +326,12 @@ func TestPluginContext(t *testing.T) {
 		t.Fatalf("MountLocal failed: %v", err)
 	}
 
-	session, err := fs.NewSession("plugin-session", []string{"/toolfs/data"})
+	session, err := fs.NewSession("skill-session", []string{"/toolfs/data"})
 	if err != nil {
 		t.Fatalf("NewSession failed: %v", err)
 	}
 
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
 	// Test ReadFile()
 	data, err := ctx.ReadFile("/toolfs/data/test.txt")
@@ -344,19 +344,19 @@ func TestPluginContext(t *testing.T) {
 	}
 
 	// Test WriteFile()
-	err = ctx.WriteFile("/toolfs/data/plugin-test.txt", []byte("Plugin test"))
+	err = ctx.WriteFile("/toolfs/data/skill-test.txt", []byte("Skill test"))
 	if err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
 	// Verify write
-	data, err = ctx.ReadFile("/toolfs/data/plugin-test.txt")
+	data, err = ctx.ReadFile("/toolfs/data/skill-test.txt")
 	if err != nil {
 		t.Fatalf("ReadFile after write failed: %v", err)
 	}
 
-	if string(data) != "Plugin test" {
-		t.Errorf("Expected 'Plugin test', got '%s'", string(data))
+	if string(data) != "Skill test" {
+		t.Errorf("Expected 'Skill test', got '%s'", string(data))
 	}
 
 	// Test ListDir()
@@ -384,7 +384,7 @@ func TestPluginContext(t *testing.T) {
 	}
 }
 
-func TestFileProcessorPlugin(t *testing.T) {
+func TestFileProcessorSkill(t *testing.T) {
 	fs := NewToolFS("/toolfs")
 	tmpDir, cleanup := setupTestDir(t)
 	defer cleanup()
@@ -399,11 +399,11 @@ func TestFileProcessorPlugin(t *testing.T) {
 		t.Fatalf("NewSession failed: %v", err)
 	}
 
-	ctx := NewPluginContext(fs, session)
-	plugin := &FileProcessorPlugin{context: ctx}
+	ctx := NewSkillContext(fs, session)
+	skill := &FileProcessorSkill{context: ctx}
 
 	// Test Init()
-	err = plugin.Init(map[string]interface{}{
+	err = skill.Init(map[string]interface{}{
 		"allowed_paths": []interface{}{"/toolfs/data"},
 	})
 	if err != nil {
@@ -411,21 +411,21 @@ func TestFileProcessorPlugin(t *testing.T) {
 	}
 
 	// Test Execute - read_and_process (without allowed_paths restriction)
-	pluginNoRestriction := &FileProcessorPlugin{context: ctx}
-	pluginNoRestriction.Init(nil) // No allowed_paths restriction
+	skillNoRestriction := &FileProcessorSkill{context: ctx}
+	skillNoRestriction.Init(nil) // No allowed_paths restriction
 
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "read_and_process",
 		Path:      "/toolfs/data/test.txt",
 	}
 	input, _ := json.Marshal(request)
 
-	output, err := pluginNoRestriction.Execute(input)
+	output, err := skillNoRestriction.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	var response PluginResponse
+	var response SkillResponse
 	if err := json.Unmarshal(output, &response); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
@@ -440,13 +440,13 @@ func TestFileProcessorPlugin(t *testing.T) {
 	}
 
 	// Test Execute - list_files (with allowed_paths)
-	request = PluginRequest{
+	request = SkillRequest{
 		Operation: "list_files",
 		Path:      "/toolfs/data",
 	}
 	input, _ = json.Marshal(request)
 
-	output, err = plugin.Execute(input)
+	output, err = skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute list_files failed: %v", err)
 	}
@@ -470,33 +470,33 @@ func TestFileProcessorPlugin(t *testing.T) {
 	}
 
 	// Test Execute - invalid operation
-	request = PluginRequest{
+	request = SkillRequest{
 		Operation: "invalid_operation",
 	}
 	input, _ = json.Marshal(request)
 
-	_, err = plugin.Execute(input)
+	_, err = skill.Execute(input)
 	if err == nil {
 		t.Error("Expected error for invalid operation")
 	}
 
 	// Test Execute - path not in allowed_paths
-	// Create a new plugin instance for this test to avoid state issues
-	plugin2 := &FileProcessorPlugin{context: ctx}
-	err = plugin2.Init(map[string]interface{}{
+	// Create a new skill instance for this test to avoid state issues
+	skill2 := &FileProcessorSkill{context: ctx}
+	err = skill2.Init(map[string]interface{}{
 		"allowed_paths": []interface{}{"/toolfs/data/subdir"},
 	})
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 
-	request = PluginRequest{
+	request = SkillRequest{
 		Operation: "read_and_process",
 		Path:      "/toolfs/data/test.txt",
 	}
 	input, _ = json.Marshal(request)
 
-	_, err = plugin2.Execute(input)
+	_, err = skill2.Execute(input)
 	if err == nil {
 		t.Error("Expected error for path not in allowed_paths")
 	}
@@ -505,8 +505,8 @@ func TestFileProcessorPlugin(t *testing.T) {
 	}
 }
 
-func TestPluginRegistryExecutePlugin(t *testing.T) {
-	registry := NewPluginRegistry()
+func TestSkillExecutorRegistryExecuteSkill(t *testing.T) {
+	registry := NewSkillExecutorRegistry()
 
 	fs := NewToolFS("/toolfs")
 	tmpDir, cleanup := setupTestDir(t)
@@ -514,22 +514,22 @@ func TestPluginRegistryExecutePlugin(t *testing.T) {
 
 	fs.MountLocal("/data", tmpDir, false)
 	session, _ := fs.NewSession("test-session", []string{"/toolfs/data"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ExamplePlugin{name: "test-plugin", version: "1.0.0"}
-	plugin.Init(nil)
+	skill := &ExampleSkill{name: "test-skill", version: "1.0.0"}
+	skill.Init(nil)
 
-	registry.Register(plugin, ctx)
+	registry.Register(skill, ctx)
 
-	// Test ExecutePlugin()
-	request := &PluginRequest{
+	// Test ExecuteSkill()
+	request := &SkillRequest{
 		Operation: "test",
 		Path:      "/toolfs/data/test.txt",
 	}
 
-	response, err := registry.ExecutePlugin("test-plugin", request)
+	response, err := registry.ExecuteSkill("test-skill", request)
 	if err != nil {
-		t.Fatalf("ExecutePlugin failed: %v", err)
+		t.Fatalf("ExecuteSkill failed: %v", err)
 	}
 
 	if !response.Success {
@@ -537,39 +537,39 @@ func TestPluginRegistryExecutePlugin(t *testing.T) {
 	}
 
 	result := response.Result.(map[string]interface{})
-	if result["plugin"] != "test-plugin" {
-		t.Errorf("Expected plugin 'test-plugin', got '%v'", result["plugin"])
+	if result["code"] != "test-skill" {
+		t.Errorf("Expected skill 'test-skill', got '%v'", result["code"])
 	}
 
-	// Test ExecutePlugin - non-existent plugin
-	_, err = registry.ExecutePlugin("nonexistent", request)
+	// Test ExecuteSkill - non-existent skill
+	_, err = registry.ExecuteSkill("nonexistent", request)
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 }
 
-func TestPluginRegistryInitPlugin(t *testing.T) {
-	registry := NewPluginRegistry()
+func TestSkillExecutorRegistryInitSkill(t *testing.T) {
+	registry := NewSkillExecutorRegistry()
 
-	plugin := &ExamplePlugin{name: "test-plugin", version: "1.0.0"}
-	registry.Register(plugin, nil)
+	skill := &ExampleSkill{name: "test-skill", version: "1.0.0"}
+	registry.Register(skill, nil)
 
-	// Test InitPlugin()
-	err := registry.InitPlugin("test-plugin", map[string]interface{}{
+	// Test InitSkill()
+	err := registry.InitSkill("test-skill", map[string]interface{}{
 		"timeout": 30.0,
 	})
 	if err != nil {
-		t.Fatalf("InitPlugin failed: %v", err)
+		t.Fatalf("InitSkill failed: %v", err)
 	}
 
-	// Test InitPlugin - non-existent plugin
-	err = registry.InitPlugin("nonexistent", nil)
+	// Test InitSkill - non-existent skill
+	err = registry.InitSkill("nonexistent", nil)
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 
-	// Test InitPlugin - invalid config
-	err = registry.InitPlugin("test-plugin", map[string]interface{}{
+	// Test InitSkill - invalid config
+	err = registry.InitSkill("test-skill", map[string]interface{}{
 		"timeout": -1.0,
 	})
 	if err == nil {
@@ -577,8 +577,8 @@ func TestPluginRegistryInitPlugin(t *testing.T) {
 	}
 }
 
-func TestPluginContextWithNilToolFS(t *testing.T) {
-	ctx := &PluginContext{fs: nil, session: nil}
+func TestSkillContextWithNilToolFS(t *testing.T) {
+	ctx := &SkillContext{fs: nil, session: nil}
 
 	// Test ReadFile with nil ToolFS
 	_, err := ctx.ReadFile("/test/path")
@@ -605,9 +605,9 @@ func TestPluginContextWithNilToolFS(t *testing.T) {
 	}
 }
 
-func TestPluginRequestResponseJSON(t *testing.T) {
-	// Test PluginRequest JSON encoding/decoding
-	request := PluginRequest{
+func TestSkillRequestResponseJSON(t *testing.T) {
+	// Test SkillRequest JSON encoding/decoding
+	request := SkillRequest{
 		Operation: "read_file",
 		Path:      "/toolfs/data/test.txt",
 		Data: map[string]interface{}{
@@ -623,7 +623,7 @@ func TestPluginRequestResponseJSON(t *testing.T) {
 		t.Fatalf("Failed to marshal request: %v", err)
 	}
 
-	var decoded PluginRequest
+	var decoded SkillRequest
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Failed to unmarshal request: %v", err)
 	}
@@ -635,8 +635,8 @@ func TestPluginRequestResponseJSON(t *testing.T) {
 		t.Errorf("Path mismatch")
 	}
 
-	// Test PluginResponse JSON encoding/decoding
-	response := PluginResponse{
+	// Test SkillResponse JSON encoding/decoding
+	response := SkillResponse{
 		Success: true,
 		Result: map[string]interface{}{
 			"content": "test content",
@@ -652,7 +652,7 @@ func TestPluginRequestResponseJSON(t *testing.T) {
 		t.Fatalf("Failed to marshal response: %v", err)
 	}
 
-	var decodedResp PluginResponse
+	var decodedResp SkillResponse
 	if err := json.Unmarshal(data, &decodedResp); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
@@ -667,56 +667,56 @@ func TestPluginRequestResponseJSON(t *testing.T) {
 	}
 }
 
-func TestFileProcessorPluginWithoutContext(t *testing.T) {
-	plugin := &FileProcessorPlugin{context: nil}
+func TestFileProcessorSkillWithoutContext(t *testing.T) {
+	skill := &FileProcessorSkill{context: nil}
 
-	plugin.Init(nil)
+	skill.Init(nil)
 
-	request := PluginRequest{
+	request := SkillRequest{
 		Operation: "read_and_process",
 		Path:      "/toolfs/data/test.txt",
 	}
 	input, _ := json.Marshal(request)
 
-	_, err := plugin.Execute(input)
+	_, err := skill.Execute(input)
 	if err == nil {
-		t.Error("Expected error when plugin context is nil")
+		t.Error("Expected error when skill context is nil")
 	}
 }
 
-func TestErrorPlugin(t *testing.T) {
+func TestErrorSkill(t *testing.T) {
 	// Test Init error
-	plugin := &ErrorPlugin{
+	skill := &ErrorSkill{
 		initError: errors.New("initialization failed"),
 	}
 
-	err := plugin.Init(nil)
+	err := skill.Init(nil)
 	if err == nil {
 		t.Error("Expected init error")
 	}
 
 	// Test Execute error
-	plugin = &ErrorPlugin{
+	skill = &ErrorSkill{
 		executeError: errors.New("execution failed"),
 	}
-	plugin.Init(nil)
+	skill.Init(nil)
 
 	input := []byte(`{"operation":"test"}`)
-	_, err = plugin.Execute(input)
+	_, err = skill.Execute(input)
 	if err == nil {
 		t.Error("Expected execute error")
 	}
 
 	// Test Execute with no error (returns error response)
-	plugin = &ErrorPlugin{}
-	plugin.Init(nil)
+	skill = &ErrorSkill{}
+	skill.Init(nil)
 
-	output, err := plugin.Execute(input)
+	output, err := skill.Execute(input)
 	if err != nil {
 		t.Fatalf("Execute should not return error: %v", err)
 	}
 
-	var response PluginResponse
+	var response SkillResponse
 	if err := json.Unmarshal(output, &response); err != nil {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
@@ -729,7 +729,7 @@ func TestErrorPlugin(t *testing.T) {
 // MockWASMLoader is a mock implementation for testing WASM loading.
 type MockWASMLoader struct {
 	loadFunc        func(string) ([]byte, error)
-	instantiateFunc func([]byte, *PluginContext) (ToolFSPlugin, error)
+	instantiateFunc func([]byte, *SkillContext) (SkillExecutor, error)
 }
 
 func (m *MockWASMLoader) LoadWASM(path string) ([]byte, error) {
@@ -739,116 +739,116 @@ func (m *MockWASMLoader) LoadWASM(path string) ([]byte, error) {
 	return []byte("mock wasm bytes"), nil
 }
 
-func (m *MockWASMLoader) Instantiate(wasmBytes []byte, context *PluginContext) (ToolFSPlugin, error) {
+func (m *MockWASMLoader) Instantiate(wasmBytes []byte, context *SkillContext) (SkillExecutor, error) {
 	if m.instantiateFunc != nil {
 		return m.instantiateFunc(wasmBytes, context)
 	}
-	// Return a mock plugin
-	return &ExamplePlugin{name: "wasm-plugin", version: "1.0.0"}, nil
+	// Return a mock skill
+	return &ExampleSkill{name: "wasm-skill", version: "1.0.0"}, nil
 }
 
-func TestPluginManagerInjectPlugin(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerInjectSkill(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ExamplePlugin{name: "test-plugin", version: "1.0.0"}
+	skill := &ExampleSkill{name: "test-skill", version: "1.0.0"}
 
-	// Test InjectPlugin
-	err := pm.InjectPlugin(plugin, ctx, nil)
+	// Test InjectSkill
+	err := pm.InjectSkill(skill, ctx, nil)
 	if err != nil {
-		t.Fatalf("InjectPlugin failed: %v", err)
+		t.Fatalf("InjectSkill failed: %v", err)
 	}
 
-	// Verify plugin is loaded
-	plugins := pm.ListPlugins()
-	if len(plugins) != 1 {
-		t.Errorf("Expected 1 plugin, got %d", len(plugins))
+	// Verify skill is loaded
+	skills := pm.ListSkills()
+	if len(skills) != 1 {
+		t.Errorf("Expected 1 skill, got %d", len(skills))
 	}
 
-	if plugins[0] != "test-plugin" {
-		t.Errorf("Expected plugin 'test-plugin', got '%s'", plugins[0])
+	if skills[0] != "test-skill" {
+		t.Errorf("Expected skill 'test-skill', got '%s'", skills[0])
 	}
 
 	// Test duplicate injection
-	err = pm.InjectPlugin(plugin, ctx, nil)
+	err = pm.InjectSkill(skill, ctx, nil)
 	if err == nil {
-		t.Error("Expected error for duplicate plugin injection")
+		t.Error("Expected error for duplicate skill injection")
 	}
 
-	// Test nil plugin
-	err = pm.InjectPlugin(nil, ctx, nil)
+	// Test nil skill
+	err = pm.InjectSkill(nil, ctx, nil)
 	if err == nil {
-		t.Error("Expected error for nil plugin")
+		t.Error("Expected error for nil skill")
 	}
 
-	// Test plugin with empty name
-	emptyPlugin := &ExamplePlugin{name: "", version: "1.0.0"}
-	err = pm.InjectPlugin(emptyPlugin, ctx, nil)
+	// Test skill with empty name
+	emptySkill := &ExampleSkill{name: "", version: "1.0.0"}
+	err = pm.InjectSkill(emptySkill, ctx, nil)
 	if err == nil {
-		t.Error("Expected error for plugin with empty name")
+		t.Error("Expected error for skill with empty name")
 	}
 }
 
-func TestPluginManagerListPlugins(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerListExecutors(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
 	// Initially empty
-	plugins := pm.ListPlugins()
-	if len(plugins) != 0 {
-		t.Errorf("Expected 0 plugins initially, got %d", len(plugins))
+	skills := pm.ListSkills()
+	if len(skills) != 0 {
+		t.Errorf("Expected 0 skills initially, got %d", len(skills))
 	}
 
-	// Inject multiple plugins
-	pm.InjectPlugin(&ExamplePlugin{name: "plugin1", version: "1.0.0"}, ctx, nil)
-	pm.InjectPlugin(&ExamplePlugin{name: "plugin2", version: "1.0.0"}, ctx, nil)
-	pm.InjectPlugin(&ExamplePlugin{name: "plugin3", version: "1.0.0"}, ctx, nil)
+	// Inject multiple skills
+	pm.InjectSkill(&ExampleSkill{name: "skill1", version: "1.0.0"}, ctx, nil)
+	pm.InjectSkill(&ExampleSkill{name: "skill2", version: "1.0.0"}, ctx, nil)
+	pm.InjectSkill(&ExampleSkill{name: "skill3", version: "1.0.0"}, ctx, nil)
 
-	plugins = pm.ListPlugins()
-	if len(plugins) != 3 {
-		t.Errorf("Expected 3 plugins, got %d", len(plugins))
+	skills = pm.ListSkills()
+	if len(skills) != 3 {
+		t.Errorf("Expected 3 skills, got %d", len(skills))
 	}
 
-	// Verify all plugins are listed
-	pluginMap := make(map[string]bool)
-	for _, name := range plugins {
-		pluginMap[name] = true
+	// Verify all skills are listed
+	skillMap := make(map[string]bool)
+	for _, name := range skills {
+		skillMap[name] = true
 	}
 
-	if !pluginMap["plugin1"] || !pluginMap["plugin2"] || !pluginMap["plugin3"] {
-		t.Error("Expected all plugins to be listed")
+	if !skillMap["skill1"] || !skillMap["skill2"] || !skillMap["skill3"] {
+		t.Error("Expected all skills to be listed")
 	}
 }
 
-func TestPluginManagerExecutePlugin(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerExecuteSkill(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ExamplePlugin{name: "test-plugin", version: "1.0.0"}
-	pm.InjectPlugin(plugin, ctx, nil)
+	skill := &ExampleSkill{name: "test-skill", version: "1.0.0"}
+	pm.InjectSkill(skill, ctx, nil)
 
-	// Test ExecutePlugin
-	request := PluginRequest{
+	// Test ExecuteSkill
+	request := SkillRequest{
 		Operation: "test",
 		Path:      "/toolfs/data/test.txt",
 	}
 	input, _ := json.Marshal(request)
 
-	output, err := pm.ExecutePlugin("test-plugin", input)
+	output, err := pm.ExecuteSkill("test-skill", input)
 	if err != nil {
-		t.Fatalf("ExecutePlugin failed: %v", err)
+		t.Fatalf("ExecuteSkill failed: %v", err)
 	}
 
-	var response PluginResponse
+	var response SkillResponse
 	if err := json.Unmarshal(output, &response); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
@@ -857,30 +857,30 @@ func TestPluginManagerExecutePlugin(t *testing.T) {
 		t.Errorf("Expected success, got error: %s", response.Error)
 	}
 
-	// Test ExecutePlugin - non-existent plugin
-	_, err = pm.ExecutePlugin("nonexistent", input)
+	// Test ExecuteSkill - non-existent skill
+	_, err = pm.ExecuteSkill("nonexistent", input)
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 }
 
-func TestPluginManagerExecutePluginTimeout(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerExecuteSkillTimeout(t *testing.T) {
+	pm := NewSkillExecutorManager()
 	pm.SetTimeout(100 * time.Millisecond) // Short timeout
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	// Create a slow plugin
-	slowPlugin := &SlowPlugin{delay: 200 * time.Millisecond}
-	pm.InjectPlugin(slowPlugin, ctx, nil)
+	// Create a slow skill
+	slowSkill := &SlowSkill{delay: 200 * time.Millisecond}
+	pm.InjectSkill(slowSkill, ctx, nil)
 
-	request := PluginRequest{Operation: "test"}
+	request := SkillRequest{Operation: "test"}
 	input, _ := json.Marshal(request)
 
 	// Should timeout
-	_, err := pm.ExecutePlugin("slow-plugin", input)
+	_, err := pm.ExecuteSkill("slow-skill", input)
 	if err == nil {
 		t.Error("Expected timeout error")
 	}
@@ -889,34 +889,35 @@ func TestPluginManagerExecutePluginTimeout(t *testing.T) {
 	}
 }
 
-// SlowPlugin is a plugin that delays execution for testing timeouts.
-type SlowPlugin struct {
+// SlowSkill is a skill that delays execution for testing timeouts.
+type SlowSkill struct {
 	delay time.Duration
 }
 
-func (p *SlowPlugin) Name() string    { return "slow-plugin" }
-func (p *SlowPlugin) Version() string { return "1.0.0" }
-func (p *SlowPlugin) Init(config map[string]interface{}) error {
+func (p *SlowSkill) Name() string    { return "slow-skill" }
+func (p *SlowSkill) Version() string { return "1.0.0" }
+func (p *SlowSkill) Init(config map[string]interface{}) error {
 	if delay, ok := config["delay"].(float64); ok {
 		p.delay = time.Duration(delay) * time.Millisecond
 	}
 	return nil
 }
-func (p *SlowPlugin) Execute(input []byte) ([]byte, error) {
+
+func (p *SlowSkill) Execute(input []byte) ([]byte, error) {
 	time.Sleep(p.delay)
-	response := PluginResponse{Success: true, Result: "delayed result"}
+	response := SkillResponse{Success: true, Result: "delayed result"}
 	return json.Marshal(response)
 }
 
-func TestPluginManagerLoadPlugin(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerLoadSkill(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
 	// Test loading without WASM loader (should fail for .wasm files)
-	err := pm.LoadPlugin("test.wasm", ctx, nil)
+	err := pm.LoadSkill("test.wasm", ctx, nil)
 	if err == nil {
 		t.Error("Expected error when loading WASM without loader")
 	}
@@ -928,39 +929,39 @@ func TestPluginManagerLoadPlugin(t *testing.T) {
 	mockLoader := &MockWASMLoader{}
 	pm.SetWASMLoader(mockLoader)
 
-	err = pm.LoadPlugin("test.wasm", ctx, nil)
+	err = pm.LoadSkill("test.wasm", ctx, nil)
 	if err != nil {
-		t.Fatalf("LoadPlugin with WASM loader failed: %v", err)
+		t.Fatalf("LoadSkill with WASM loader failed: %v", err)
 	}
 
-	// Verify plugin is loaded
-	plugins := pm.ListPlugins()
-	if len(plugins) != 1 {
-		t.Errorf("Expected 1 plugin after loading, got %d", len(plugins))
+	// Verify skill is loaded
+	skills := pm.ListSkills()
+	if len(skills) != 1 {
+		t.Errorf("Expected 1 skill after loading, got %d", len(skills))
 	}
 
-	// Test loading duplicate plugin
-	err = pm.LoadPlugin("test.wasm", ctx, nil)
+	// Test loading duplicate skill
+	err = pm.LoadSkill("test.wasm", ctx, nil)
 	if err == nil {
-		t.Error("Expected error for duplicate plugin loading")
+		t.Error("Expected error for duplicate skill loading")
 	}
 
-	// Test loading native plugin (not yet implemented)
-	err = pm.LoadPlugin("test.so", ctx, nil)
+	// Test loading native skill (not yet implemented)
+	err = pm.LoadSkill("test.so", ctx, nil)
 	if err == nil {
-		t.Error("Expected error for native plugin (not implemented)")
+		t.Error("Expected error for native skill (not implemented)")
 	}
 	if !strings.Contains(err.Error(), "not yet implemented") {
 		t.Errorf("Expected 'not yet implemented' error, got: %v", err)
 	}
 }
 
-func TestPluginManagerLoadPluginWithConfig(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerLoadSkillWithConfig(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
 	mockLoader := &MockWASMLoader{}
 	pm.SetWASMLoader(mockLoader)
@@ -970,15 +971,15 @@ func TestPluginManagerLoadPluginWithConfig(t *testing.T) {
 		"memory_limit": 1024 * 1024,
 	}
 
-	err := pm.LoadPlugin("config-test.wasm", ctx, config)
+	err := pm.LoadSkill("config-test.wasm", ctx, config)
 	if err != nil {
-		t.Fatalf("LoadPlugin with config failed: %v", err)
+		t.Fatalf("LoadSkill with config failed: %v", err)
 	}
 
 	// Verify config was passed
-	info, err := pm.GetPluginInfo("wasm-plugin")
+	info, err := pm.GetSkillInfo("wasm-skill")
 	if err != nil {
-		t.Fatalf("GetPluginInfo failed: %v", err)
+		t.Fatalf("GetSkillInfo failed: %v", err)
 	}
 
 	if info.Config == nil {
@@ -986,24 +987,24 @@ func TestPluginManagerLoadPluginWithConfig(t *testing.T) {
 	}
 }
 
-func TestPluginManagerGetPluginInfo(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerGetSkillInfo(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ExamplePlugin{name: "info-plugin", version: "1.0.0"}
-	pm.InjectPlugin(plugin, ctx, map[string]interface{}{"test": "value"})
+	skill := &ExampleSkill{name: "info-skill", version: "1.0.0"}
+	pm.InjectSkill(skill, ctx, map[string]interface{}{"test": "value"})
 
-	// Test GetPluginInfo
-	info, err := pm.GetPluginInfo("info-plugin")
+	// Test GetSkillInfo
+	info, err := pm.GetSkillInfo("info-skill")
 	if err != nil {
-		t.Fatalf("GetPluginInfo failed: %v", err)
+		t.Fatalf("GetSkillInfo failed: %v", err)
 	}
 
-	if info.Plugin.Name() != "info-plugin" {
-		t.Errorf("Expected plugin name 'info-plugin', got '%s'", info.Plugin.Name())
+	if info.Executor.Name() != "info-skill" {
+		t.Errorf("Expected skill name 'info-skill', got '%s'", info.Executor.Name())
 	}
 
 	if info.Source != "injected" {
@@ -1014,121 +1015,121 @@ func TestPluginManagerGetPluginInfo(t *testing.T) {
 		t.Error("Expected context to be set")
 	}
 
-	// Test GetPluginInfo - non-existent plugin
-	_, err = pm.GetPluginInfo("nonexistent")
+	// Test GetSkillInfo - non-existent skill
+	_, err = pm.GetSkillInfo("nonexistent")
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 }
 
-func TestPluginManagerUnloadPlugin(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerUnloadSkill(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ExamplePlugin{name: "unload-plugin", version: "1.0.0"}
-	pm.InjectPlugin(plugin, ctx, nil)
+	skill := &ExampleSkill{name: "unload-skill", version: "1.0.0"}
+	pm.InjectSkill(skill, ctx, nil)
 
-	// Verify plugin is loaded
-	if len(pm.ListPlugins()) != 1 {
-		t.Error("Expected plugin to be loaded")
+	// Verify skill is loaded
+	if len(pm.ListSkills()) != 1 {
+		t.Error("Expected skill to be loaded")
 	}
 
-	// Test UnloadPlugin
-	err := pm.UnloadPlugin("unload-plugin")
+	// Test UnloadSkill
+	err := pm.UnloadSkill("unload-skill")
 	if err != nil {
-		t.Fatalf("UnloadPlugin failed: %v", err)
+		t.Fatalf("UnloadSkill failed: %v", err)
 	}
 
-	// Verify plugin is unloaded
-	if len(pm.ListPlugins()) != 0 {
-		t.Error("Expected plugin to be unloaded")
+	// Verify skill is unloaded
+	if len(pm.ListSkills()) != 0 {
+		t.Error("Expected skill to be unloaded")
 	}
 
-	// Test UnloadPlugin - non-existent plugin
-	err = pm.UnloadPlugin("nonexistent")
+	// Test UnloadSkill - non-existent skill
+	err = pm.UnloadSkill("nonexistent")
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 }
 
-func TestPluginManagerSetPluginTimeout(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerSetSkillTimeout(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ExamplePlugin{name: "timeout-plugin", version: "1.0.0"}
-	pm.InjectPlugin(plugin, ctx, nil)
+	skill := &ExampleSkill{name: "timeout-skill", version: "1.0.0"}
+	pm.InjectSkill(skill, ctx, nil)
 
-	// Test SetPluginTimeout
+	// Test SetSkillTimeout
 	customTimeout := 60 * time.Second
-	err := pm.SetPluginTimeout("timeout-plugin", customTimeout)
+	err := pm.SetSkillTimeout("timeout-skill", customTimeout)
 	if err != nil {
-		t.Fatalf("SetPluginTimeout failed: %v", err)
+		t.Fatalf("SetSkillTimeout failed: %v", err)
 	}
 
-	info, _ := pm.GetPluginInfo("timeout-plugin")
+	info, _ := pm.GetSkillInfo("timeout-skill")
 	if info.Timeout != customTimeout {
 		t.Errorf("Expected timeout %v, got %v", customTimeout, info.Timeout)
 	}
 
-	// Test SetPluginTimeout - non-existent plugin
-	err = pm.SetPluginTimeout("nonexistent", customTimeout)
+	// Test SetSkillTimeout - non-existent skill
+	err = pm.SetSkillTimeout("nonexistent", customTimeout)
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 
-	// Test SetPluginTimeout - invalid timeout
-	err = pm.SetPluginTimeout("timeout-plugin", -1)
+	// Test SetSkillTimeout - invalid timeout
+	err = pm.SetSkillTimeout("timeout-skill", -1)
 	if err == nil {
 		t.Error("Expected error for invalid timeout")
 	}
 }
 
-func TestPluginManagerSetPluginSandboxed(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerSetSkillSandboxed(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ExamplePlugin{name: "sandbox-plugin", version: "1.0.0"}
-	pm.InjectPlugin(plugin, ctx, nil)
+	skill := &ExampleSkill{name: "sandbox-skill", version: "1.0.0"}
+	pm.InjectSkill(skill, ctx, nil)
 
-	// Test SetPluginSandboxed
-	err := pm.SetPluginSandboxed("sandbox-plugin", true)
+	// Test SetSkillSandboxed
+	err := pm.SetSkillSandboxed("sandbox-skill", true)
 	if err != nil {
-		t.Fatalf("SetPluginSandboxed failed: %v", err)
+		t.Fatalf("SetSkillSandboxed failed: %v", err)
 	}
 
-	info, _ := pm.GetPluginInfo("sandbox-plugin")
+	info, _ := pm.GetSkillInfo("sandbox-skill")
 	if !info.Sandboxed {
-		t.Error("Expected plugin to be sandboxed")
+		t.Error("Expected skill to be sandboxed")
 	}
 
-	err = pm.SetPluginSandboxed("sandbox-plugin", false)
+	err = pm.SetSkillSandboxed("sandbox-skill", false)
 	if err != nil {
-		t.Fatalf("SetPluginSandboxed failed: %v", err)
+		t.Fatalf("SetSkillSandboxed failed: %v", err)
 	}
 
-	info, _ = pm.GetPluginInfo("sandbox-plugin")
+	info, _ = pm.GetSkillInfo("sandbox-skill")
 	if info.Sandboxed {
-		t.Error("Expected plugin to not be sandboxed")
+		t.Error("Expected skill to not be sandboxed")
 	}
 
-	// Test SetPluginSandboxed - non-existent plugin
-	err = pm.SetPluginSandboxed("nonexistent", true)
+	// Test SetSkillSandboxed - non-existent skill
+	err = pm.SetSkillSandboxed("nonexistent", true)
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 }
 
-func TestPluginManagerSetTimeout(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerSetTimeout(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	// Test default timeout
 	defaultTimeout := 30 * time.Second
@@ -1145,8 +1146,8 @@ func TestPluginManagerSetTimeout(t *testing.T) {
 	}
 }
 
-func TestPluginManagerWASMLoader(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerWASMLoader(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	// Test SetWASMLoader
 	mockLoader := &MockWASMLoader{}
@@ -1157,15 +1158,15 @@ func TestPluginManagerWASMLoader(t *testing.T) {
 	}
 }
 
-func TestPluginManagerLoadPluginErrorHandling(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerLoadSkillErrorHandling(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
 	// Test empty path
-	err := pm.LoadPlugin("", ctx, nil)
+	err := pm.LoadSkill("", ctx, nil)
 	if err == nil {
 		t.Error("Expected error for empty path")
 	}
@@ -1178,62 +1179,62 @@ func TestPluginManagerLoadPluginErrorHandling(t *testing.T) {
 	}
 	pm.SetWASMLoader(failingLoader)
 
-	err = pm.LoadPlugin("nonexistent.wasm", ctx, nil)
+	err = pm.LoadSkill("nonexistent.wasm", ctx, nil)
 	if err == nil {
 		t.Error("Expected error when WASM loader fails")
 	}
 
 	// Test WASM loader that fails to instantiate
 	failingInstantiateLoader := &MockWASMLoader{
-		instantiateFunc: func(wasmBytes []byte, context *PluginContext) (ToolFSPlugin, error) {
+		instantiateFunc: func(wasmBytes []byte, context *SkillContext) (SkillExecutor, error) {
 			return nil, errors.New("instantiation failed")
 		},
 	}
 	pm.SetWASMLoader(failingInstantiateLoader)
 
-	err = pm.LoadPlugin("instantiate-fail.wasm", ctx, nil)
+	err = pm.LoadSkill("instantiate-fail.wasm", ctx, nil)
 	if err == nil {
 		t.Error("Expected error when instantiation fails")
 	}
 
-	// Test plugin that fails initialization
+	// Test skill that fails initialization
 	initFailLoader := &MockWASMLoader{
-		instantiateFunc: func(wasmBytes []byte, context *PluginContext) (ToolFSPlugin, error) {
-			return &ErrorPlugin{initError: errors.New("init failed")}, nil
+		instantiateFunc: func(wasmBytes []byte, context *SkillContext) (SkillExecutor, error) {
+			return &ErrorSkill{initError: errors.New("init failed")}, nil
 		},
 	}
 	pm.SetWASMLoader(initFailLoader)
 
-	err = pm.LoadPlugin("init-fail.wasm", ctx, nil)
+	err = pm.LoadSkill("init-fail.wasm", ctx, nil)
 	if err == nil {
-		t.Error("Expected error when plugin initialization fails")
+		t.Error("Expected error when skill initialization fails")
 	}
 }
 
-func TestPluginManagerExecutePluginWithCustomTimeout(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerExecuteSkillWithCustomTimeout(t *testing.T) {
+	pm := NewSkillExecutorManager()
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("test-session", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	// Create plugin with custom timeout
-	slowPlugin := &SlowPlugin{delay: 200 * time.Millisecond}
-	pm.InjectPlugin(slowPlugin, ctx, nil)
+	// Create skill with custom timeout
+	slowSkill := &SlowSkill{delay: 200 * time.Millisecond}
+	pm.InjectSkill(slowSkill, ctx, nil)
 
-	// Set custom timeout for this plugin
-	pm.SetPluginTimeout("slow-plugin", 300*time.Millisecond)
+	// Set custom timeout for this skill
+	pm.SetSkillTimeout("slow-skill", 300*time.Millisecond)
 
-	request := PluginRequest{Operation: "test"}
+	request := SkillRequest{Operation: "test"}
 	input, _ := json.Marshal(request)
 
 	// Should not timeout with custom timeout
-	output, err := pm.ExecutePlugin("slow-plugin", input)
+	output, err := pm.ExecuteSkill("slow-skill", input)
 	if err != nil {
-		t.Fatalf("ExecutePlugin should not timeout with custom timeout: %v", err)
+		t.Fatalf("ExecuteSkill should not timeout with custom timeout: %v", err)
 	}
 
-	var response PluginResponse
+	var response SkillResponse
 	if err := json.Unmarshal(output, &response); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
@@ -1243,8 +1244,8 @@ func TestPluginManagerExecutePluginWithCustomTimeout(t *testing.T) {
 	}
 }
 
-func TestPluginManagerIntegration(t *testing.T) {
-	pm := NewPluginManager()
+func TestSkillExecutorManagerIntegration(t *testing.T) {
+	pm := NewSkillExecutorManager()
 	pm.SetTimeout(5 * time.Second)
 
 	fs := NewToolFS("/toolfs")
@@ -1253,25 +1254,25 @@ func TestPluginManagerIntegration(t *testing.T) {
 
 	fs.MountLocal("/data", tmpDir, false)
 	session, _ := fs.NewSession("integration-session", []string{"/toolfs/data"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	// Inject file processor plugin (without path restriction for this test)
-	fileProcessor := &FileProcessorPlugin{context: ctx}
-	pm.InjectPlugin(fileProcessor, ctx, nil) // No path restriction
+	// Inject file processor skill (without path restriction for this test)
+	fileProcessor := &FileProcessorSkill{context: ctx}
+	pm.InjectSkill(fileProcessor, ctx, nil) // No path restriction
 
-	// Execute plugin
-	request := &PluginRequest{
+	// Execute skill
+	request := &SkillRequest{
 		Operation: "read_and_process",
 		Path:      "/toolfs/data/test.txt",
 	}
 	input, _ := json.Marshal(request)
 
-	output, err := pm.ExecutePlugin("file-processor", input)
+	output, err := pm.ExecuteSkill("file-processor", input)
 	if err != nil {
-		t.Fatalf("ExecutePlugin failed: %v", err)
+		t.Fatalf("ExecuteSkill failed: %v", err)
 	}
 
-	var response PluginResponse
+	var response SkillResponse
 	if err := json.Unmarshal(output, &response); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
@@ -1280,29 +1281,29 @@ func TestPluginManagerIntegration(t *testing.T) {
 		t.Errorf("Expected success, got error: %s", response.Error)
 	}
 
-	// List plugins
-	plugins := pm.ListPlugins()
-	if len(plugins) != 1 {
-		t.Errorf("Expected 1 plugin, got %d", len(plugins))
+	// List skills
+	skills := pm.ListSkills()
+	if len(skills) != 1 {
+		t.Errorf("Expected 1 skill, got %d", len(skills))
 	}
 
-	// Get plugin info
-	info, err := pm.GetPluginInfo("file-processor")
+	// Get skill info
+	info, err := pm.GetSkillInfo("file-processor")
 	if err != nil {
-		t.Fatalf("GetPluginInfo failed: %v", err)
+		t.Fatalf("GetSkillInfo failed: %v", err)
 	}
 
-	if info.Plugin.Name() != "file-processor" {
-		t.Errorf("Expected plugin name 'file-processor', got '%s'", info.Plugin.Name())
+	if info.Executor.Name() != "file-processor" {
+		t.Errorf("Expected skill name 'file-processor', got '%s'", info.Executor.Name())
 	}
 
-	// Unload plugin
-	err = pm.UnloadPlugin("file-processor")
+	// Unload skill
+	err = pm.UnloadSkill("file-processor")
 	if err != nil {
-		t.Fatalf("UnloadPlugin failed: %v", err)
+		t.Fatalf("UnloadSkill failed: %v", err)
 	}
 
-	if len(pm.ListPlugins()) != 0 {
-		t.Error("Expected no plugins after unload")
+	if len(pm.ListSkills()) != 0 {
+		t.Error("Expected no skills after unload")
 	}
 }

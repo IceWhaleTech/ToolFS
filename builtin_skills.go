@@ -8,33 +8,33 @@ import (
 	"strings"
 )
 
-// BuiltinMemoryPlugin is the built-in memory plugin that wraps InMemoryStore
-type BuiltinMemoryPlugin struct {
+// BuiltinMemorySkill is the built-in memory skill that wraps InMemoryStore
+type BuiltinMemorySkill struct {
 	store *InMemoryStore
 }
 
-// NewBuiltinMemoryPlugin creates a new built-in memory plugin
-func NewBuiltinMemoryPlugin(store *InMemoryStore) *BuiltinMemoryPlugin {
-	return &BuiltinMemoryPlugin{
+// NewBuiltinMemorySkill creates a new built-in memory skill
+func NewBuiltinMemorySkill(store *InMemoryStore) *BuiltinMemorySkill {
+	return &BuiltinMemorySkill{
 		store: store,
 	}
 }
 
-func (p *BuiltinMemoryPlugin) Name() string {
+func (p *BuiltinMemorySkill) Name() string {
 	return "toolfs-memory"
 }
 
-func (p *BuiltinMemoryPlugin) Version() string {
+func (p *BuiltinMemorySkill) Version() string {
 	return "1.0.0"
 }
 
-func (p *BuiltinMemoryPlugin) Init(config map[string]interface{}) error {
-	// Memory plugin is already initialized with store
+func (p *BuiltinMemorySkill) Init(config map[string]interface{}) error {
+	// Memory skill is already initialized with store
 	return nil
 }
 
-func (p *BuiltinMemoryPlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *BuiltinMemorySkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	if err := json.Unmarshal(input, &request); err != nil {
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
@@ -44,7 +44,7 @@ func (p *BuiltinMemoryPlugin) Execute(input []byte) ([]byte, error) {
 		// Extract entry ID from path or data
 		entryID := p.extractEntryID(request.Path, request.Data)
 		if entryID == "" {
-			return json.Marshal(PluginResponse{
+			return json.Marshal(SkillResponse{
 				Success: false,
 				Error:   "memory entry ID is required",
 			})
@@ -52,13 +52,13 @@ func (p *BuiltinMemoryPlugin) Execute(input []byte) ([]byte, error) {
 
 		entry, err := p.store.Get(entryID)
 		if err != nil {
-			return json.Marshal(PluginResponse{
+			return json.Marshal(SkillResponse{
 				Success: false,
 				Error:   err.Error(),
 			})
 		}
 
-		return json.Marshal(PluginResponse{
+		return json.Marshal(SkillResponse{
 			Success: true,
 			Result:  entry,
 		})
@@ -66,7 +66,7 @@ func (p *BuiltinMemoryPlugin) Execute(input []byte) ([]byte, error) {
 	case "write_file", "write":
 		entryID := p.extractEntryID(request.Path, request.Data)
 		if entryID == "" {
-			return json.Marshal(PluginResponse{
+			return json.Marshal(SkillResponse{
 				Success: false,
 				Error:   "memory entry ID is required",
 			})
@@ -102,13 +102,13 @@ func (p *BuiltinMemoryPlugin) Execute(input []byte) ([]byte, error) {
 
 		err := p.store.Set(entryID, content, metadata)
 		if err != nil {
-			return json.Marshal(PluginResponse{
+			return json.Marshal(SkillResponse{
 				Success: false,
 				Error:   err.Error(),
 			})
 		}
 
-		return json.Marshal(PluginResponse{
+		return json.Marshal(SkillResponse{
 			Success: true,
 			Result: map[string]interface{}{
 				"id":      entryID,
@@ -119,13 +119,13 @@ func (p *BuiltinMemoryPlugin) Execute(input []byte) ([]byte, error) {
 	case "list_dir", "list":
 		entries, err := p.store.List()
 		if err != nil {
-			return json.Marshal(PluginResponse{
+			return json.Marshal(SkillResponse{
 				Success: false,
 				Error:   err.Error(),
 			})
 		}
 
-		return json.Marshal(PluginResponse{
+		return json.Marshal(SkillResponse{
 			Success: true,
 			Result: map[string]interface{}{
 				"entries": entries,
@@ -133,14 +133,14 @@ func (p *BuiltinMemoryPlugin) Execute(input []byte) ([]byte, error) {
 		})
 
 	default:
-		return json.Marshal(PluginResponse{
+		return json.Marshal(SkillResponse{
 			Success: false,
 			Error:   fmt.Sprintf("unknown operation: %s", request.Operation),
 		})
 	}
 }
 
-func (p *BuiltinMemoryPlugin) extractEntryID(path string, data map[string]interface{}) string {
+func (p *BuiltinMemorySkill) extractEntryID(path string, data map[string]interface{}) string {
 	// Try to extract from path first
 	if path != "" {
 		parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -169,7 +169,7 @@ func (p *BuiltinMemoryPlugin) extractEntryID(path string, data map[string]interf
 }
 
 // GetSkillDocument implements SkillDocumentProvider
-func (p *BuiltinMemoryPlugin) GetSkillDocument() string {
+func (p *BuiltinMemorySkill) GetSkillDocument() string {
 	return `---
 name: toolfs-memory
 description: Persistent key-value storage for session data, conversation context, and agent state. Use this skill when the user requests storing or retrieving memory entries such as "Store this in memory", "Remember this preference", "Recall the previous conversation", or "List all memory entries".
@@ -196,33 +196,33 @@ LIST /toolfs/memory
 `
 }
 
-// BuiltinRAGPlugin is the built-in RAG plugin that wraps InMemoryRAGStore
-type BuiltinRAGPlugin struct {
+// BuiltinRAGSkill is the built-in RAG skill that wraps InMemoryRAGStore
+type BuiltinRAGSkill struct {
 	store *InMemoryRAGStore
 }
 
-// NewBuiltinRAGPlugin creates a new built-in RAG plugin
-func NewBuiltinRAGPlugin(store *InMemoryRAGStore) *BuiltinRAGPlugin {
-	return &BuiltinRAGPlugin{
+// NewBuiltinRAGSkill creates a new built-in RAG skill
+func NewBuiltinRAGSkill(store *InMemoryRAGStore) *BuiltinRAGSkill {
+	return &BuiltinRAGSkill{
 		store: store,
 	}
 }
 
-func (p *BuiltinRAGPlugin) Name() string {
+func (p *BuiltinRAGSkill) Name() string {
 	return "toolfs-rag"
 }
 
-func (p *BuiltinRAGPlugin) Version() string {
+func (p *BuiltinRAGSkill) Version() string {
 	return "1.0.0"
 }
 
-func (p *BuiltinRAGPlugin) Init(config map[string]interface{}) error {
-	// RAG plugin is already initialized with store
+func (p *BuiltinRAGSkill) Init(config map[string]interface{}) error {
+	// RAG skill is already initialized with store
 	return nil
 }
 
-func (p *BuiltinRAGPlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *BuiltinRAGSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	if err := json.Unmarshal(input, &request); err != nil {
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
@@ -232,7 +232,7 @@ func (p *BuiltinRAGPlugin) Execute(input []byte) ([]byte, error) {
 		// Extract query from path or data
 		query, topK := p.extractQuery(request.Path, request.Data)
 		if query == "" {
-			return json.Marshal(PluginResponse{
+			return json.Marshal(SkillResponse{
 				Success: false,
 				Error:   "query text is required",
 			})
@@ -240,13 +240,13 @@ func (p *BuiltinRAGPlugin) Execute(input []byte) ([]byte, error) {
 
 		results, err := p.store.Search(query, topK)
 		if err != nil {
-			return json.Marshal(PluginResponse{
+			return json.Marshal(SkillResponse{
 				Success: false,
 				Error:   err.Error(),
 			})
 		}
 
-		return json.Marshal(PluginResponse{
+		return json.Marshal(SkillResponse{
 			Success: true,
 			Result: RAGSearchResults{
 				Query:   query,
@@ -256,14 +256,14 @@ func (p *BuiltinRAGPlugin) Execute(input []byte) ([]byte, error) {
 		})
 
 	default:
-		return json.Marshal(PluginResponse{
+		return json.Marshal(SkillResponse{
 			Success: false,
 			Error:   fmt.Sprintf("unknown operation: %s", request.Operation),
 		})
 	}
 }
 
-func (p *BuiltinRAGPlugin) extractQuery(path string, data map[string]interface{}) (string, int) {
+func (p *BuiltinRAGSkill) extractQuery(path string, data map[string]interface{}) (string, int) {
 	var query string
 	topK := 5
 
@@ -308,7 +308,7 @@ func (p *BuiltinRAGPlugin) extractQuery(path string, data map[string]interface{}
 }
 
 // GetSkillDocument implements SkillDocumentProvider
-func (p *BuiltinRAGPlugin) GetSkillDocument() string {
+func (p *BuiltinRAGSkill) GetSkillDocument() string {
 	return `---
 name: toolfs-rag
 description: Semantic search over vector databases for document retrieval. Use this skill when the user requests searching documents, finding relevant content, or performing semantic queries such as "Search for information about X", "Find documents related to Y", or "Query the knowledge base".
@@ -329,44 +329,43 @@ GET /toolfs/rag/query?text=<query_text>&top_k=<number>
 `
 }
 
-// BuiltinPlugins holds references to all built-in plugins
-type BuiltinPlugins struct {
-	Memory *BuiltinMemoryPlugin
-	RAG    *BuiltinRAGPlugin
+// BuiltinSkills holds references to all built-in skills
+type BuiltinSkills struct {
+	Memory *BuiltinMemorySkill
+	RAG    *BuiltinRAGSkill
 }
 
-// RegisterBuiltinPlugins registers all built-in plugins with the plugin manager
-// Only registers plugins if the stores are the built-in implementations
-func RegisterBuiltinPlugins(fs *ToolFS, manager *PluginManager, session *Session) (*BuiltinPlugins, error) {
-	ctx := NewPluginContext(fs, session)
+// RegisterBuiltinSkills registers all built-in skills with the skill manager
+// Only registers skills if the stores are the built-in implementations
+func RegisterBuiltinSkills(fs *ToolFS, manager *SkillExecutorManager, session *Session) (*BuiltinSkills, error) {
+	ctx := NewSkillContext(fs, session)
 
-	var memoryPlugin *BuiltinMemoryPlugin
-	var ragPlugin *BuiltinRAGPlugin
+	var memorySkill *BuiltinMemorySkill
+	var ragSkill *BuiltinRAGSkill
 
-	// Create memory plugin if using built-in store
+	// Create memory skill if using built-in store
 	if inMemoryStore, ok := fs.memoryStore.(*InMemoryStore); ok {
-		memoryPlugin = NewBuiltinMemoryPlugin(inMemoryStore)
-		if err := manager.InjectPlugin(memoryPlugin, ctx, nil); err != nil {
-			return nil, fmt.Errorf("failed to register memory plugin: %w", err)
+		memorySkill = NewBuiltinMemorySkill(inMemoryStore)
+		if err := manager.InjectSkill(memorySkill, ctx, nil); err != nil {
+			return nil, fmt.Errorf("failed to register memory skill: %w", err)
 		}
 	}
 
-	// Create RAG plugin if using built-in store
+	// Create RAG skill if using built-in store
 	if inMemoryRAGStore, ok := fs.ragStore.(*InMemoryRAGStore); ok {
-		ragPlugin = NewBuiltinRAGPlugin(inMemoryRAGStore)
-		if err := manager.InjectPlugin(ragPlugin, ctx, nil); err != nil {
-			return nil, fmt.Errorf("failed to register RAG plugin: %w", err)
+		ragSkill = NewBuiltinRAGSkill(inMemoryRAGStore)
+		if err := manager.InjectSkill(ragSkill, ctx, nil); err != nil {
+			return nil, fmt.Errorf("failed to register RAG skill: %w", err)
 		}
 	}
 
-	// Return nil if neither plugin could be registered
-	if memoryPlugin == nil && ragPlugin == nil {
-		return nil, fmt.Errorf("built-in plugins require built-in store implementations")
+	// Return nil if neither skill could be registered
+	if memorySkill == nil && ragSkill == nil {
+		return nil, fmt.Errorf("built-in skills require built-in store implementations")
 	}
 
-	return &BuiltinPlugins{
-		Memory: memoryPlugin,
-		RAG:    ragPlugin,
+	return &BuiltinSkills{
+		Memory: memorySkill,
+		RAG:    ragSkill,
 	}, nil
 }
-

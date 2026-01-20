@@ -36,7 +36,7 @@ func (r *ToolFSRoot) OnAdd(ctx context.Context) {
 		path:   r.toolfs.rootPath + "/memory",
 	}
 	memInode := r.NewPersistentInode(ctx, memNode, fs.StableAttr{
-		Mode: syscall.S_IFDIR | 0755,
+		Mode: syscall.S_IFDIR | 0o755,
 	})
 	r.AddChild("memory", memInode, false)
 
@@ -46,12 +46,12 @@ func (r *ToolFSRoot) OnAdd(ctx context.Context) {
 		path:   r.toolfs.rootPath + "/rag",
 	}
 	ragInode := r.NewPersistentInode(ctx, ragNode, fs.StableAttr{
-		Mode: syscall.S_IFDIR | 0755,
+		Mode: syscall.S_IFDIR | 0o755,
 	})
 	r.AddChild("rag", ragInode, false)
 
 	// Add mounted directories
-	for mountPoint, _ := range r.toolfs.mounts {
+	for mountPoint := range r.toolfs.mounts {
 		relPath := r.toolfs.normalizeMountPoint(mountPoint)
 		if relPath != "" {
 			mountNode := &ToolFSDir{
@@ -59,24 +59,24 @@ func (r *ToolFSRoot) OnAdd(ctx context.Context) {
 				path:   mountPoint,
 			}
 			mountInode := r.NewPersistentInode(ctx, mountNode, fs.StableAttr{
-				Mode: syscall.S_IFDIR | 0755,
+				Mode: syscall.S_IFDIR | 0o755,
 			})
 			r.AddChild(relPath, mountInode, false)
 		}
 	}
 
-	// Add plugin mounts
-	for mountPoint, _ := range r.toolfs.pluginMounts {
+	// Add skill mounts
+	for mountPoint := range r.toolfs.skillMounts {
 		relPath := r.toolfs.normalizeMountPoint(mountPoint)
 		if relPath != "" {
-			pluginNode := &ToolFSDir{
+			skillNode := &ToolFSDir{
 				toolfs: r.toolfs,
 				path:   mountPoint,
 			}
-			pluginInode := r.NewPersistentInode(ctx, pluginNode, fs.StableAttr{
-				Mode: syscall.S_IFDIR | 0755,
+			skillInode := r.NewPersistentInode(ctx, skillNode, fs.StableAttr{
+				Mode: syscall.S_IFDIR | 0o755,
 			})
-			r.AddChild(relPath, pluginInode, false)
+			r.AddChild(relPath, skillInode, false)
 		}
 	}
 }
@@ -91,7 +91,11 @@ func (fs *ToolFS) normalizeMountPoint(mountPoint string) string {
 	}
 
 	if strings.HasPrefix(mountPoint, root+"/") {
-		return strings.TrimPrefix(mountPoint, root+"/")
+		rel := strings.TrimPrefix(mountPoint, root+"/")
+		if idx := strings.Index(rel, "/"); idx != -1 {
+			return rel[:idx]
+		}
+		return rel
 	}
 
 	// Extract last component
@@ -111,8 +115,10 @@ type ToolFSDir struct {
 }
 
 // Ensure ToolFSDir implements the required interfaces
-var _ fs.NodeReaddirer = (*ToolFSDir)(nil)
-var _ fs.NodeLookuper = (*ToolFSDir)(nil)
+var (
+	_ fs.NodeReaddirer = (*ToolFSDir)(nil)
+	_ fs.NodeLookuper  = (*ToolFSDir)(nil)
+)
 
 // Readdir implements NodeReaddirer interface
 func (d *ToolFSDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -129,9 +135,9 @@ func (d *ToolFSDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			name = strings.TrimSuffix(name, "/")
 		}
 
-		mode := uint32(syscall.S_IFREG | 0644)
+		mode := uint32(syscall.S_IFREG | 0o644)
 		if isDir {
-			mode = syscall.S_IFDIR | 0755
+			mode = syscall.S_IFDIR | 0o755
 		}
 
 		dirEntries = append(dirEntries, fuse.DirEntry{
@@ -160,7 +166,7 @@ func (d *ToolFSDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 			path:   childPath,
 		}
 		childInode := d.NewPersistentInode(ctx, childNode, fs.StableAttr{
-			Mode: syscall.S_IFDIR | 0755,
+			Mode: syscall.S_IFDIR | 0o755,
 		})
 		return childInode, 0
 	} else {
@@ -169,7 +175,7 @@ func (d *ToolFSDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 			path:   childPath,
 		}
 		childInode := d.NewPersistentInode(ctx, childNode, fs.StableAttr{
-			Mode: syscall.S_IFREG | 0644,
+			Mode: syscall.S_IFREG | 0o644,
 		})
 		return childInode, 0
 	}
@@ -183,8 +189,10 @@ type ToolFSFile struct {
 }
 
 // Ensure ToolFSFile implements the required interfaces
-var _ fs.NodeOpener = (*ToolFSFile)(nil)
-var _ fs.NodeGetattrer = (*ToolFSFile)(nil)
+var (
+	_ fs.NodeOpener    = (*ToolFSFile)(nil)
+	_ fs.NodeGetattrer = (*ToolFSFile)(nil)
+)
 
 // Open implements NodeOpener interface
 func (f *ToolFSFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
@@ -203,7 +211,7 @@ func (f *ToolFSFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.At
 
 	out.Size = uint64(info.Size)
 	out.Mtime = uint64(info.ModTime.Unix())
-	out.Mode = syscall.S_IFREG | 0644
+	out.Mode = syscall.S_IFREG | 0o644
 
 	return 0
 }
@@ -215,8 +223,10 @@ type ToolFSFileHandle struct {
 }
 
 // Ensure ToolFSFileHandle implements the required interfaces
-var _ fs.FileReader = (*ToolFSFileHandle)(nil)
-var _ fs.FileWriter = (*ToolFSFileHandle)(nil)
+var (
+	_ fs.FileReader = (*ToolFSFileHandle)(nil)
+	_ fs.FileWriter = (*ToolFSFileHandle)(nil)
+)
 
 // Read implements FileReader interface
 func (fh *ToolFSFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {

@@ -212,28 +212,29 @@ type SandboxBackend interface {
 	ListSnapshots() ([]string, error)
 }
 
-// PluginMount represents a plugin mounted to a path
-type PluginMount struct {
-	PluginName string
-	Plugin     ToolFSPlugin
-	ReadOnly   bool // Whether the plugin mount is read-only
+// SkillMount represents a skill mounted to a path
+type SkillMount struct {
+	SkillName string
+	Skill     SkillExecutor
+	ReadOnly  bool // Whether the skill mount is read-only
 }
 
 // ToolFS represents the filesystem instance
 type ToolFS struct {
-	rootPath        string
-	mounts          map[string]*Mount
-	pluginMounts    map[string]*PluginMount // Path -> PluginMount
-	memoryStore     MemoryStore
-	ragStore        RAGStore
-	sessions        map[string]*Session
-	snapshots       map[string]*Snapshot
-	currentSnapshot string                // Currently active snapshot (if any)
-	sandboxBackend  SandboxBackend        // Optional sandbox integration
-	pluginManager   *PluginManager        // Optional plugin manager
-	pluginRegistry  *PluginRegistry       // Optional direct plugin registry
-	skillDocManager *SkillDocumentManager // Skill document manager
-	builtinPlugins  *BuiltinPlugins       // Built-in plugins (Memory, RAG)
+	rootPath         string
+	mounts           map[string]*Mount
+	skillMounts      map[string]*SkillMount // Path -> SkillMount (formerly SkillMount)
+	memoryStore      MemoryStore
+	ragStore         RAGStore
+	sessions         map[string]*Session
+	snapshots        map[string]*Snapshot
+	currentSnapshot  string                 // Currently active snapshot (if any)
+	sandboxBackend   SandboxBackend         // Optional sandbox integration
+	executorManager  *SkillExecutorManager  // Optional skill manager
+	executorRegistry *SkillExecutorRegistry // Optional direct skill registry
+	skillDocManager  *SkillDocumentManager  // Skill document manager
+	skillRegistry    *SkillRegistry         // Skill registry for managing skills
+	builtinSkills    *BuiltinSkills         // Built-in skills (Memory, RAG)
 
 	// Performance optimizations: cached paths
 	memoryPath         string   // Cached memory path: rootPath + "/memory"
@@ -255,7 +256,7 @@ func NewToolFS(rootPath string) *ToolFS {
 	fs := &ToolFS{
 		rootPath:        rootPath,
 		mounts:          make(map[string]*Mount),
-		pluginMounts:    make(map[string]*PluginMount),
+		skillMounts:     make(map[string]*SkillMount),
 		memoryStore:     NewInMemoryStore(),
 		ragStore:        NewInMemoryRAGStore(),
 		sessions:        make(map[string]*Session),
@@ -274,23 +275,23 @@ func NewToolFS(rootPath string) *ToolFS {
 	return fs
 }
 
-// SetPluginManager sets the plugin manager for ToolFS plugin mounts
-// If builtin plugins haven't been registered yet, they will be registered automatically
-func (fs *ToolFS) SetPluginManager(manager *PluginManager) {
-	fs.pluginManager = manager
+// SetSkillExecutorManager sets the skill manager for ToolFS skill mounts
+// If builtin skills haven't been registered yet, they will be registered automatically
+func (fs *ToolFS) SetSkillExecutorManager(manager *SkillExecutorManager) {
+	fs.executorManager = manager
 
-	// Auto-register builtin plugins if not already registered
-	if fs.builtinPlugins == nil && manager != nil {
-		// Create a default session for builtin plugins
+	// Auto-register builtin skills if not already registered
+	if fs.builtinSkills == nil && manager != nil {
+		// Create a default session for builtin skills
 		defaultSession, _ := fs.NewSession("__builtin__", []string{})
-		builtinPlugins, err := RegisterBuiltinPlugins(fs, manager, defaultSession)
+		builtinSkills, err := RegisterBuiltinSkills(fs, manager, defaultSession)
 		if err == nil {
-			fs.builtinPlugins = builtinPlugins
+			fs.builtinSkills = builtinSkills
 
-			// Register builtin plugins with skill document manager
+			// Register builtin skills with skill document manager
 			if fs.skillDocManager != nil {
-				fs.skillDocManager.RegisterPlugin(builtinPlugins.Memory)
-				fs.skillDocManager.RegisterPlugin(builtinPlugins.RAG)
+				fs.skillDocManager.RegisterExecutor(builtinSkills.Memory)
+				fs.skillDocManager.RegisterExecutor(builtinSkills.RAG)
 			}
 		}
 	}
@@ -334,6 +335,11 @@ func (fs *ToolFS) SetMemoryStore(store MemoryStore) {
 // SetRAGStore sets the RAG store for the ToolFS instance
 func (fs *ToolFS) SetRAGStore(store RAGStore) {
 	fs.ragStore = store
+}
+
+// GetSkillDocumentManager returns the skill document manager
+func (fs *ToolFS) GetSkillDocumentManager() *SkillDocumentManager {
+	return fs.skillDocManager
 }
 
 // normalizeVirtualPath normalizes a virtual path to use forward slashes
@@ -453,21 +459,21 @@ func (fs *ToolFS) isVirtualPath(path string) (bool, string) {
 	return false, ""
 }
 
-// isPluginMount checks if the path is mounted to a plugin
-func (fs *ToolFS) isPluginMount(path string) (*PluginMount, string) {
+// isSkillMount checks if the path is mounted to a skill
+func (fs *ToolFS) isSkillMount(path string) (*SkillMount, string) {
 	path = normalizeVirtualPath(path)
 
-	// Find the longest matching plugin mount point
-	var bestMount *PluginMount
+	// Find the longest matching skill mount point
+	var bestMount *SkillMount
 	var bestMountPoint string
 	var relPath string
 
-	for mountPoint, pluginMount := range fs.pluginMounts {
+	for mountPoint, skillMount := range fs.skillMounts {
 		mountPoint = normalizeVirtualPath(mountPoint)
 		if strings.HasPrefix(path, mountPoint) {
 			if len(mountPoint) > len(bestMountPoint) {
 				bestMountPoint = mountPoint
-				bestMount = pluginMount
+				bestMount = skillMount
 				relPath = strings.TrimPrefix(path, mountPoint)
 				relPath = strings.TrimPrefix(relPath, "/")
 				if relPath == "" {
@@ -486,20 +492,20 @@ func (fs *ToolFS) isPluginMount(path string) (*PluginMount, string) {
 	return nil, ""
 }
 
-// MountPlugin mounts a plugin to a ToolFS path.
+// MountSkillExecutor mounts a skill to a ToolFS path.
 // When operations are performed on paths under the mount point,
-// they are forwarded to the plugin's Execute method.
+// they are forwarded to the skill's Execute method.
 //
 // Example:
 //
-//	fs.MountPlugin("/toolfs/rag", "rag-plugin")
-//	// ReadFile("/toolfs/rag/query?text=test") will forward to plugin
-func (fs *ToolFS) MountPlugin(path string, pluginName string) error {
+//	fs.MountSkillExecutor("/toolfs/rag", "rag-skill")
+//	// ReadFile("/toolfs/rag/query?text=test") will forward to skill
+func (fs *ToolFS) MountSkillExecutor(path string, skillName string) error {
 	if path == "" {
 		return errors.New("mount path cannot be empty")
 	}
-	if pluginName == "" {
-		return errors.New("plugin name cannot be empty")
+	if skillName == "" {
+		return errors.New("skill name cannot be empty")
 	}
 
 	// Normalize path
@@ -512,32 +518,32 @@ func (fs *ToolFS) MountPlugin(path string, pluginName string) error {
 		path = normalizeVirtualPath(fs.rootPath + path)
 	}
 
-	// Check if plugin exists in plugin manager or registry
-	var plugin ToolFSPlugin
-	registry := fs.GetPluginRegistry()
+	// Check if skill exists in skill manager or registry
+	var skill SkillExecutor
+	registry := fs.GetSkillExecutorRegistry()
 	if registry != nil {
 		var err error
-		plugin, err = registry.Get(pluginName)
+		skill, err = registry.Get(skillName)
 		if err != nil {
-			return fmt.Errorf("plugin '%s' not found in registry: %w", pluginName, err)
+			return fmt.Errorf("skill '%s' not found in registry: %w", skillName, err)
 		}
 	} else {
-		return errors.New("plugin registry not set, use AddPluginRegistry() or SetPluginManager() first")
+		return errors.New("skill registry not set, use AddSkillExecutorRegistry() or SetSkillExecutorManager() first")
 	}
 
 	// Check if path is already mounted
-	if _, exists := fs.pluginMounts[path]; exists {
-		return fmt.Errorf("path '%s' is already mounted to a plugin", path)
+	if _, exists := fs.skillMounts[path]; exists {
+		return fmt.Errorf("path '%s' is already mounted to a skill", path)
 	}
 
-	// Create plugin mount
-	fs.pluginMounts[path] = &PluginMount{
-		PluginName: pluginName,
-		Plugin:     plugin,
-		ReadOnly:   true, // Plugins are read-only by default for safety
+	// Create skill mount
+	fs.skillMounts[path] = &SkillMount{
+		SkillName: skillName,
+		Skill:     skill,
+		ReadOnly:  true, // Skills are read-only by default for safety
 	}
 
-	// Invalidate path resolution cache since plugin mounts changed
+	// Invalidate path resolution cache since skill mounts changed
 	fs.pathResolveCache.Range(func(key, value interface{}) bool {
 		pathKey := key.(string)
 		// Remove cache entries that might be affected by this mount
@@ -550,8 +556,8 @@ func (fs *ToolFS) MountPlugin(path string, pluginName string) error {
 	return nil
 }
 
-// UnmountPlugin removes a plugin mount from a path.
-func (fs *ToolFS) UnmountPlugin(path string) error {
+// UnmountSkillExecutor removes a skill mount from a path.
+func (fs *ToolFS) UnmountSkillExecutor(path string) error {
 	path = normalizeVirtualPath(path)
 
 	if !strings.HasPrefix(path, fs.rootPath) {
@@ -561,13 +567,13 @@ func (fs *ToolFS) UnmountPlugin(path string) error {
 		path = normalizeVirtualPath(fs.rootPath + path)
 	}
 
-	if _, exists := fs.pluginMounts[path]; !exists {
-		return fmt.Errorf("no plugin mounted at path '%s'", path)
+	if _, exists := fs.skillMounts[path]; !exists {
+		return fmt.Errorf("no skill mounted at path '%s'", path)
 	}
 
-	delete(fs.pluginMounts, path)
+	delete(fs.skillMounts, path)
 
-	// Invalidate path resolution cache since plugin mounts changed
+	// Invalidate path resolution cache since skill mounts changed
 	fs.pathResolveCache.Range(func(key, value interface{}) bool {
 		pathKey := key.(string)
 		// Remove cache entries that might be affected by this unmount
@@ -580,10 +586,10 @@ func (fs *ToolFS) UnmountPlugin(path string) error {
 	return nil
 }
 
-// executePluginMount executes a plugin for a given path and operation.
-func (fs *ToolFS) executePluginMount(pluginMount *PluginMount, path, relPath, operation string, inputData []byte, session *Session) ([]byte, error) {
-	// Create plugin request
-	request := PluginRequest{
+// executeSkillMount executes a skill for a given path and operation.
+func (fs *ToolFS) executeSkillMount(skillMount *SkillMount, path, relPath, operation string, inputData []byte, session *Session) ([]byte, error) {
+	// Create skill request
+	request := SkillRequest{
 		Operation: operation,
 		Path:      path,
 		Data: map[string]interface{}{
@@ -605,37 +611,37 @@ func (fs *ToolFS) executePluginMount(pluginMount *PluginMount, path, relPath, op
 	// Marshal request
 	requestBytes, err := json.Marshal(request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create plugin request: %w", err)
+		return nil, fmt.Errorf("failed to create skill request: %w", err)
 	}
 
-	// Execute plugin with error recovery
+	// Execute skill with error recovery
 	var output []byte
 	var execErr error
 
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				// Plugin execution panicked - convert to error but don't crash
-				execErr = fmt.Errorf("plugin execution panicked: %v", r)
+				// Skill execution panicked - convert to error but don't crash
+				execErr = fmt.Errorf("skill execution panicked: %v", r)
 			}
 		}()
 
-		// Execute plugin
-		output, execErr = pluginMount.Plugin.Execute(requestBytes)
+		// Execute skill
+		output, execErr = skillMount.Skill.Execute(requestBytes)
 	}()
 
 	if execErr != nil {
-		return nil, fmt.Errorf("plugin execution failed: %w", execErr)
+		return nil, fmt.Errorf("skill execution failed: %w", execErr)
 	}
 
-	// Parse plugin response
-	var response PluginResponse
+	// Parse skill response
+	var response SkillResponse
 	if err := json.Unmarshal(output, &response); err != nil {
-		return nil, fmt.Errorf("failed to parse plugin response: %w", err)
+		return nil, fmt.Errorf("failed to parse skill response: %w", err)
 	}
 
 	if !response.Success {
-		return nil, fmt.Errorf("plugin returned error: %s", response.Error)
+		return nil, fmt.Errorf("skill returned error: %s", response.Error)
 	}
 
 	// Extract result
@@ -646,7 +652,7 @@ func (fs *ToolFS) executePluginMount(pluginMount *PluginMount, path, relPath, op
 	// Try to marshal result to JSON if it's not a string
 	resultBytes, err := json.Marshal(response.Result)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal plugin result: %w", err)
+		return nil, fmt.Errorf("failed to marshal skill result: %w", err)
 	}
 
 	return resultBytes, nil
@@ -659,7 +665,7 @@ func (fs *ToolFS) resolvePath(path string) (string, *Mount, error) {
 	path = normalizeVirtualPath(path)
 
 	// Try to get from cache first
-	// Note: Cache is invalidated when mounts change (MountLocal/UnmountPlugin)
+	// Note: Cache is invalidated when mounts change (MountLocal/UnmountSkillExecutor)
 	if cached, ok := fs.pathResolveCache.Load(path); ok {
 		entry := cached.(*resolveCacheEntry)
 		entry.mu.RLock()
@@ -677,11 +683,11 @@ func (fs *ToolFS) resolvePath(path string) (string, *Mount, error) {
 	var mount *Mount
 	var err error
 
-	// Check if this is a plugin mount first (highest priority)
-	if pluginMount, relPath := fs.isPluginMount(path); pluginMount != nil {
-		// Return special marker for plugin mount
+	// Check if this is a skill mount first (highest priority)
+	if skillMount, relPath := fs.isSkillMount(path); skillMount != nil {
+		// Return special marker for skill mount
 		localPath = relPath
-		mount = &Mount{LocalPath: "__PLUGIN_MOUNT__:" + pluginMount.PluginName, ReadOnly: pluginMount.ReadOnly}
+		mount = &Mount{LocalPath: "__SKILL_MOUNT__:" + skillMount.SkillName, ReadOnly: skillMount.ReadOnly}
 	} else if isVirtual, vType := fs.isVirtualPath(path); isVirtual {
 		// Check if this is a virtual path (memory or rag)
 		localPath = ""
@@ -758,30 +764,30 @@ func (fs *ToolFS) ReadFileWithSession(path string, session *Session) ([]byte, er
 
 	var data []byte
 
-	// Handle plugin mounts
-	if strings.HasPrefix(mount.LocalPath, "__PLUGIN_MOUNT__:") {
-		pluginName := strings.TrimPrefix(mount.LocalPath, "__PLUGIN_MOUNT__:")
-		// Find the plugin mount by matching path prefix
-		var pluginMount *PluginMount
+	// Handle skill mounts
+	if strings.HasPrefix(mount.LocalPath, "__SKILL_MOUNT__:") {
+		skillName := strings.TrimPrefix(mount.LocalPath, "__SKILL_MOUNT__:")
+		// Find the skill mount by matching path prefix
+		var skillMount *SkillMount
 		var mountPoint string
-		for mp, pm := range fs.pluginMounts {
-			if pm.PluginName == pluginName && strings.HasPrefix(path, mp) {
+		for mp, pm := range fs.skillMounts {
+			if pm.SkillName == skillName && strings.HasPrefix(path, mp) {
 				if len(mp) > len(mountPoint) {
 					mountPoint = mp
-					pluginMount = pm
+					skillMount = pm
 				}
 			}
 		}
 
-		if pluginMount != nil {
-			// Execute plugin with error recovery
-			data, err = fs.executePluginMount(pluginMount, path, localPath, "read_file", nil, session)
+		if skillMount != nil {
+			// Execute skill with error recovery
+			data, err = fs.executeSkillMount(skillMount, path, localPath, "read_file", nil, session)
 			if err != nil {
 				// Return error but don't crash
 				return nil, err
 			}
 		} else {
-			return nil, fmt.Errorf("plugin mount not found for path: %s", path)
+			return nil, fmt.Errorf("skill mount not found for path: %s", path)
 		}
 	} else if mount.LocalPath == "__VIRTUAL_MEMORY__" {
 		data, err = fs.readMemory(path)
@@ -823,9 +829,8 @@ func (fs *ToolFS) readMemory(path string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Return plain text content for filesystem compatibility
-	// JSON representation is available through the API/plugin interface
-	return []byte(entry.Content), nil
+	// Return JSON representation for consistent API behavior
+	return json.Marshal(entry)
 }
 
 // readRAG performs a RAG search
@@ -911,30 +916,30 @@ func (fs *ToolFS) WriteFileWithSession(path string, data []byte, session *Sessio
 		return err
 	}
 
-	// Handle plugin mounts
-	if strings.HasPrefix(mount.LocalPath, "__PLUGIN_MOUNT__:") {
-		pluginName := strings.TrimPrefix(mount.LocalPath, "__PLUGIN_MOUNT__:")
-		var pluginMount *PluginMount
+	// Handle skill mounts
+	if strings.HasPrefix(mount.LocalPath, "__SKILL_MOUNT__:") {
+		skillName := strings.TrimPrefix(mount.LocalPath, "__SKILL_MOUNT__:")
+		var skillMount *SkillMount
 		var mountPoint string
-		for mp, pm := range fs.pluginMounts {
-			if pm.PluginName == pluginName && strings.HasPrefix(path, mp) {
+		for mp, pm := range fs.skillMounts {
+			if pm.SkillName == skillName && strings.HasPrefix(path, mp) {
 				if len(mp) > len(mountPoint) {
 					mountPoint = mp
-					pluginMount = pm
+					skillMount = pm
 				}
 			}
 		}
 
-		if pluginMount != nil {
-			if pluginMount.ReadOnly {
-				err := errors.New("cannot write to read-only plugin mount")
+		if skillMount != nil {
+			if skillMount.ReadOnly {
+				err := errors.New("cannot write to read-only skill mount")
 				if session != nil {
 					session.logAudit("WriteFile", path, false, err, 0, 0)
 				}
 				return err
 			}
-			// Execute plugin for write_file operation
-			_, err = fs.executePluginMount(pluginMount, path, localPath, "write_file", data, session)
+			// Execute skill for write_file operation
+			_, err = fs.executeSkillMount(skillMount, path, localPath, "write_file", data, session)
 			if err != nil {
 				// Return error but don't crash
 				if session != nil {
@@ -943,7 +948,7 @@ func (fs *ToolFS) WriteFileWithSession(path string, data []byte, session *Sessio
 				return err
 			}
 		} else {
-			err = fmt.Errorf("plugin mount not found for path: %s", path)
+			err = fmt.Errorf("skill mount not found for path: %s", path)
 		}
 	} else if mount.ReadOnly {
 		err := errors.New("cannot write to read-only mount")
@@ -958,13 +963,13 @@ func (fs *ToolFS) WriteFileWithSession(path string, data []byte, session *Sessio
 	} else {
 		// Create parent directory if it doesn't exist
 		parentDir := filepath.Dir(localPath)
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
+		if err := os.MkdirAll(parentDir, 0o755); err != nil {
 			if session != nil {
 				session.logAudit("WriteFile", path, false, err, 0, 0)
 			}
 			return err
 		}
-		err = os.WriteFile(localPath, data, 0644)
+		err = os.WriteFile(localPath, data, 0o644)
 	}
 
 	// Log audit entry
@@ -1053,23 +1058,23 @@ func (fs *ToolFS) ListDirWithSession(path string, session *Session) ([]string, e
 
 	var entries []string
 
-	// Handle plugin mounts
-	if strings.HasPrefix(mount.LocalPath, "__PLUGIN_MOUNT__:") {
-		pluginName := strings.TrimPrefix(mount.LocalPath, "__PLUGIN_MOUNT__:")
-		var pluginMount *PluginMount
+	// Handle skill mounts
+	if strings.HasPrefix(mount.LocalPath, "__SKILL_MOUNT__:") {
+		skillName := strings.TrimPrefix(mount.LocalPath, "__SKILL_MOUNT__:")
+		var skillMount *SkillMount
 		var mountPoint string
-		for mp, pm := range fs.pluginMounts {
-			if pm.PluginName == pluginName && strings.HasPrefix(path, mp) {
+		for mp, pm := range fs.skillMounts {
+			if pm.SkillName == skillName && strings.HasPrefix(path, mp) {
 				if len(mp) > len(mountPoint) {
 					mountPoint = mp
-					pluginMount = pm
+					skillMount = pm
 				}
 			}
 		}
 
-		if pluginMount != nil {
-			// Execute plugin for list_dir operation
-			data, execErr := fs.executePluginMount(pluginMount, path, localPath, "list_dir", nil, session)
+		if skillMount != nil {
+			// Execute skill for list_dir operation
+			data, execErr := fs.executeSkillMount(skillMount, path, localPath, "list_dir", nil, session)
 			if execErr != nil {
 				err = execErr
 			} else {
@@ -1101,7 +1106,7 @@ func (fs *ToolFS) ListDirWithSession(path string, session *Session) ([]string, e
 				}
 			}
 		} else {
-			err = fmt.Errorf("plugin mount not found for path: %s", path)
+			err = fmt.Errorf("skill mount not found for path: %s", path)
 		}
 	} else if mount.LocalPath == "__VIRTUAL_MEMORY__" {
 		path = normalizeVirtualPath(path)
@@ -1156,7 +1161,7 @@ func (fs *ToolFS) StatWithSession(path string, session *Session) (*FileInfo, err
 		return nil, err
 	}
 
-	// Handle virtual paths (memory, rag, plugins)
+	// Handle virtual paths (memory, rag, skills)
 	if mount != nil {
 		if mount.LocalPath == "__VIRTUAL_MEMORY__" {
 			// For memory entries, check if it's a directory or file
@@ -1193,9 +1198,9 @@ func (fs *ToolFS) StatWithSession(path string, session *Session) (*FileInfo, err
 			}
 			return &FileInfo{Size: 0, ModTime: time.Now(), IsDir: true}, nil
 		}
-		if strings.HasPrefix(mount.LocalPath, "__PLUGIN_MOUNT__:") {
-			// Plugin mounts - treat as directory for now
-			// In a real implementation, plugins should provide stat info
+		if strings.HasPrefix(mount.LocalPath, "__SKILL_MOUNT__:") {
+			// Skill mounts - treat as directory for now
+			// In a real implementation, skills should provide stat info
 			return &FileInfo{Size: 0, ModTime: time.Now(), IsDir: true}, nil
 		}
 	}
@@ -1667,12 +1672,12 @@ func (fs *ToolFS) RollbackSnapshot(name string) error {
 
 		// Create parent directory if needed
 		parentDir := filepath.Dir(localPath)
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
+		if err := os.MkdirAll(parentDir, 0o755); err != nil {
 			return fmt.Errorf("failed to create parent directory: %w", err)
 		}
 
 		// Write file content
-		if err := os.WriteFile(localPath, fileSnap.Content, 0644); err != nil {
+		if err := os.WriteFile(localPath, fileSnap.Content, 0o644); err != nil {
 			return fmt.Errorf("failed to restore file %s: %w", virtualPath, err)
 		}
 
@@ -1888,7 +1893,7 @@ func (fs *ToolFS) ExecuteCommandWithSession(command string, args []string, sessi
 	return nil
 }
 
-// GetSkillDocument retrieves a skill document by plugin name or path key
+// GetSkillDocument retrieves a skill document by skill name or path key
 func (fs *ToolFS) GetSkillDocument(key string) (*SkillDocument, error) {
 	if fs.skillDocManager == nil {
 		return nil, errors.New("skill document manager not initialized")
@@ -1910,38 +1915,4 @@ func (fs *ToolFS) ListSkillDocumentNames() []string {
 		return []string{}
 	}
 	return fs.skillDocManager.ListDocumentNames()
-}
-
-// GetSkillDocumentManager returns the skill document manager
-func (fs *ToolFS) GetSkillDocumentManager() *SkillDocumentManager {
-	return fs.skillDocManager
-}
-
-// RegisterPluginWithSkillDocs registers a plugin and its skill document
-func (fs *ToolFS) RegisterPluginWithSkillDocs(plugin ToolFSPlugin) error {
-	if fs.skillDocManager == nil {
-		return errors.New("skill document manager not initialized")
-	}
-
-	// Register with skill document manager
-	if err := fs.skillDocManager.RegisterPlugin(plugin); err != nil {
-		return fmt.Errorf("failed to register plugin skill document: %w", err)
-	}
-
-	// If plugin manager exists, also register the plugin
-	if fs.pluginManager != nil {
-		// Try to get context from registry or create a default one
-		ctx := &PluginContext{fs: fs, session: nil}
-		if fs.pluginRegistry != nil {
-			if pluginCtx, err := fs.pluginRegistry.GetContext(plugin.Name()); err == nil {
-				ctx = pluginCtx
-			}
-		}
-		if err := fs.pluginManager.InjectPlugin(plugin, ctx, nil); err != nil {
-			// Log error but don't fail - plugin might already be registered
-			_ = err
-		}
-	}
-
-	return nil
 }

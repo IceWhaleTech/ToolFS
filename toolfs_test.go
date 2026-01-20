@@ -20,17 +20,17 @@ func setupTestDir(t *testing.T) (string, func()) {
 
 	// Create test files and directories
 	testFile := filepath.Join(tmpDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("Hello, ToolFS!"), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte("Hello, ToolFS!"), 0o644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
 	testDir := filepath.Join(tmpDir, "subdir")
-	if err := os.Mkdir(testDir, 0755); err != nil {
+	if err := os.Mkdir(testDir, 0o755); err != nil {
 		t.Fatalf("Failed to create test dir: %v", err)
 	}
 
 	subFile := filepath.Join(testDir, "subfile.txt")
-	if err := os.WriteFile(subFile, []byte("Subdirectory file"), 0644); err != nil {
+	if err := os.WriteFile(subFile, []byte("Subdirectory file"), 0o644); err != nil {
 		t.Fatalf("Failed to create sub file: %v", err)
 	}
 
@@ -1216,24 +1216,24 @@ func TestSessionMemoryIsolation(t *testing.T) {
 	}
 }
 
-// RAGPlugin is an example plugin that handles RAG queries
-type RAGPlugin struct {
-	context *PluginContext
+// RAGSkill is an example skill that handles RAG queries
+type RAGSkill struct {
+	context *SkillContext
 }
 
-func (p *RAGPlugin) Name() string                             { return "rag-plugin" }
-func (p *RAGPlugin) Version() string                          { return "1.0.0" }
-func (p *RAGPlugin) Init(config map[string]interface{}) error { return nil }
+func (p *RAGSkill) Name() string                             { return "rag-skill" }
+func (p *RAGSkill) Version() string                          { return "1.0.0" }
+func (p *RAGSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *RAGPlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *RAGSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	if err := json.Unmarshal(input, &request); err != nil {
 		return nil, err
 	}
 
 	// Handle read_file operation for RAG queries
 	if request.Operation == "read_file" {
-		response := PluginResponse{
+		response := SkillResponse{
 			Success: true,
 			Result: map[string]interface{}{
 				"content": fmt.Sprintf("RAG results for path: %s", request.Path),
@@ -1244,7 +1244,7 @@ func (p *RAGPlugin) Execute(input []byte) ([]byte, error) {
 	}
 
 	if request.Operation == "list_dir" {
-		response := PluginResponse{
+		response := SkillResponse{
 			Success: true,
 			Result: map[string]interface{}{
 				"entries": []string{"query"},
@@ -1256,41 +1256,41 @@ func (p *RAGPlugin) Execute(input []byte) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported operation: %s", request.Operation)
 }
 
-// ContentPlugin returns a simple content string
-type ContentPlugin struct {
+// ContentSkill returns a simple content string
+type ContentSkill struct {
 	content string
 }
 
-func (p *ContentPlugin) Name() string                             { return "content-plugin" }
-func (p *ContentPlugin) Version() string                          { return "1.0.0" }
-func (p *ContentPlugin) Init(config map[string]interface{}) error { return nil }
+func (p *ContentSkill) Name() string                             { return "content-skill" }
+func (p *ContentSkill) Version() string                          { return "1.0.0" }
+func (p *ContentSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *ContentPlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *ContentSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	json.Unmarshal(input, &request)
 
-	response := PluginResponse{
+	response := SkillResponse{
 		Success: true,
 		Result:  p.content,
 	}
 	return json.Marshal(response)
 }
 
-// ListDirPlugin returns a list of directory entries
-type ListDirPlugin struct {
+// ListDirSkill returns a list of directory entries
+type ListDirSkill struct {
 	entries []string
 }
 
-func (p *ListDirPlugin) Name() string                             { return "list-plugin" }
-func (p *ListDirPlugin) Version() string                          { return "1.0.0" }
-func (p *ListDirPlugin) Init(config map[string]interface{}) error { return nil }
+func (p *ListDirSkill) Name() string                             { return "list-skill" }
+func (p *ListDirSkill) Version() string                          { return "1.0.0" }
+func (p *ListDirSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *ListDirPlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *ListDirSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	json.Unmarshal(input, &request)
 
 	if request.Operation == "list_dir" {
-		response := PluginResponse{
+		response := SkillResponse{
 			Success: true,
 			Result: map[string]interface{}{
 				"entries": p.entries,
@@ -1302,24 +1302,24 @@ func (p *ListDirPlugin) Execute(input []byte) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported operation: %s", request.Operation)
 }
 
-// WritePlugin handles write operations
-type WritePlugin struct {
+// WriteSkill handles write operations
+type WriteSkill struct {
 	lastWritten []byte
 }
 
-func (p *WritePlugin) Name() string                             { return "write-plugin" }
-func (p *WritePlugin) Version() string                          { return "1.0.0" }
-func (p *WritePlugin) Init(config map[string]interface{}) error { return nil }
+func (p *WriteSkill) Name() string                             { return "write-skill" }
+func (p *WriteSkill) Version() string                          { return "1.0.0" }
+func (p *WriteSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *WritePlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *WriteSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	json.Unmarshal(input, &request)
 
 	if request.Operation == "write_file" {
 		if inputStr, ok := request.Data["input"].(string); ok {
 			p.lastWritten = []byte(inputStr)
 		}
-		response := PluginResponse{
+		response := SkillResponse{
 			Success: true,
 			Result:  "write successful",
 		}
@@ -1329,99 +1329,99 @@ func (p *WritePlugin) Execute(input []byte) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported operation: %s", request.Operation)
 }
 
-// PanicPlugin panics during execution
-type PanicPlugin struct{}
+// PanicSkill panics during execution
+type PanicSkill struct{}
 
-func (p *PanicPlugin) Name() string                             { return "panic-plugin" }
-func (p *PanicPlugin) Version() string                          { return "1.0.0" }
-func (p *PanicPlugin) Init(config map[string]interface{}) error { return nil }
+func (p *PanicSkill) Name() string                             { return "panic-skill" }
+func (p *PanicSkill) Version() string                          { return "1.0.0" }
+func (p *PanicSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *PanicPlugin) Execute(input []byte) ([]byte, error) {
-	panic("plugin panic for testing")
+func (p *PanicSkill) Execute(input []byte) ([]byte, error) {
+	panic("skill panic for testing")
 }
 
-func TestMountPlugin(t *testing.T) {
+func TestMountSkillExecutor(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	session, _ := fs.NewSession("mount-test", []string{"/toolfs/rag"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	ragPlugin := &RAGPlugin{context: ctx}
-	pm.InjectPlugin(ragPlugin, ctx, nil)
+	ragSkill := &RAGSkill{context: ctx}
+	pm.InjectSkill(ragSkill, ctx, nil)
 
-	// Mount plugin to /toolfs/rag
-	err := fs.MountPlugin("/toolfs/rag", "rag-plugin")
+	// Mount skill to /toolfs/rag
+	err := fs.MountSkillExecutor("/toolfs/rag", "rag-skill")
 	if err != nil {
-		t.Fatalf("MountPlugin failed: %v", err)
+		t.Fatalf("MountSkill failed: %v", err)
 	}
 
-	// Verify plugin is mounted
-	pluginMount, exists := fs.pluginMounts[normalizeVirtualPath("/toolfs/rag")]
+	// Verify skill is mounted
+	skillMount, exists := fs.skillMounts[normalizeVirtualPath("/toolfs/rag")]
 	if !exists {
-		t.Fatal("Plugin mount not found")
+		t.Fatal("Skill mount not found")
 	}
 
-	if pluginMount.PluginName != "rag-plugin" {
-		t.Errorf("Expected plugin name 'rag-plugin', got '%s'", pluginMount.PluginName)
+	if skillMount.SkillName != "rag-skill" {
+		t.Errorf("Expected skill name 'rag-skill', got '%s'", skillMount.SkillName)
 	}
 
 	// Test mounting duplicate path
-	err = fs.MountPlugin("/toolfs/rag", "another-plugin")
+	err = fs.MountSkillExecutor("/toolfs/rag", "another-skill")
 	if err == nil {
 		t.Error("Expected error for duplicate mount")
 	}
 
-	// Test mounting non-existent plugin
-	err = fs.MountPlugin("/toolfs/other", "nonexistent")
+	// Test mounting non-existent skill
+	err = fs.MountSkillExecutor("/toolfs/other", "nonexistent")
 	if err == nil {
-		t.Error("Expected error for non-existent plugin")
+		t.Error("Expected error for non-existent skill")
 	}
 }
 
-func TestReadFilePluginMount(t *testing.T) {
+func TestReadFileSkillMount(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	session, _ := fs.NewSession("read-test", []string{"/toolfs/rag"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	contentPlugin := &ContentPlugin{content: "Plugin response content"}
-	pm.InjectPlugin(contentPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "content-plugin")
+	contentSkill := &ContentSkill{content: "Skill response content"}
+	pm.InjectSkill(contentSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "content-skill")
 
-	// Test ReadFile through plugin mount
+	// Test ReadFile through skill mount
 	data, err := fs.ReadFile("/toolfs/rag/xyz")
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
 
-	// ContentPlugin returns result as string, which gets converted to bytes
-	if string(data) != "Plugin response content" {
-		t.Errorf("Expected 'Plugin response content', got '%s'", string(data))
+	// ContentSkill returns result as string, which gets converted to bytes
+	if string(data) != "Skill response content" {
+		t.Errorf("Expected 'Skill response content', got '%s'", string(data))
 	}
 }
 
-func TestListDirPluginMount(t *testing.T) {
+func TestListDirSkillMount(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	session, _ := fs.NewSession("list-test", []string{"/toolfs/rag"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	listPlugin := &ListDirPlugin{entries: []string{"entry1", "entry2", "entry3"}}
-	pm.InjectPlugin(listPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "list-plugin")
+	listSkill := &ListDirSkill{entries: []string{"entry1", "entry2", "entry3"}}
+	pm.InjectSkill(listSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "list-skill")
 
 	entries, err := fs.ListDir("/toolfs/rag")
 	if err != nil {
 		t.Fatalf("ListDir failed: %v", err)
 	}
 
-	// ListDir should extract entries from plugin response
+	// ListDir should extract entries from skill response
 	if len(entries) < 3 {
 		t.Errorf("Expected at least 3 entries, got %d", len(entries))
 	}
@@ -1437,21 +1437,21 @@ func TestListDirPluginMount(t *testing.T) {
 	}
 }
 
-func TestWriteFilePluginMount(t *testing.T) {
+func TestWriteFileSkillMount(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	session, _ := fs.NewSession("write-test", []string{"/toolfs/rag"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	writePlugin := &WritePlugin{}
-	pm.InjectPlugin(writePlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "write-plugin")
+	writeSkill := &WriteSkill{}
+	pm.InjectSkill(writeSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "write-skill")
 
 	// Update mount to be writable
 	ragPath := normalizeVirtualPath("/toolfs/rag")
-	mount := fs.pluginMounts[ragPath]
+	mount := fs.skillMounts[ragPath]
 	mount.ReadOnly = false
 
 	testData := []byte("test write data")
@@ -1460,33 +1460,33 @@ func TestWriteFilePluginMount(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	if string(writePlugin.lastWritten) != string(testData) {
-		t.Errorf("Expected plugin to receive data")
+	if string(writeSkill.lastWritten) != string(testData) {
+		t.Errorf("Expected skill to receive data")
 	}
 
 	// Test read-only
 	mount.ReadOnly = true
 	err = fs.WriteFile("/toolfs/rag/test2.txt", testData)
 	if err == nil {
-		t.Error("Expected error when writing to read-only plugin mount")
+		t.Error("Expected error when writing to read-only skill mount")
 	}
 }
 
-func TestPluginMountErrorHandling(t *testing.T) {
+func TestSkillMountErrorHandling(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	session, _ := fs.NewSession("error-test", []string{"/toolfs/rag"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	errorPlugin := &ErrorPlugin{executeError: errors.New("plugin execution failed")}
-	pm.InjectPlugin(errorPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "error-plugin")
+	errorSkill := &ErrorSkill{executeError: errors.New("skill execution failed")}
+	pm.InjectSkill(errorSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "error-skill")
 
 	_, err := fs.ReadFile("/toolfs/rag/test")
 	if err == nil {
-		t.Error("Expected error from plugin")
+		t.Error("Expected error from skill")
 	}
 
 	// ToolFS should still be functional
@@ -1495,17 +1495,17 @@ func TestPluginMountErrorHandling(t *testing.T) {
 	}
 }
 
-func TestPluginMountPanicRecovery(t *testing.T) {
+func TestSkillMountPanicRecovery(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	session, _ := fs.NewSession("panic-test", []string{"/toolfs/rag"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	panicPlugin := &PanicPlugin{}
-	pm.InjectPlugin(panicPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "panic-plugin")
+	panicSkill := &PanicSkill{}
+	pm.InjectSkill(panicSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "panic-skill")
 
 	_, err := fs.ReadFile("/toolfs/rag/test")
 	if err == nil {
@@ -1522,22 +1522,22 @@ func TestPluginMountPanicRecovery(t *testing.T) {
 	}
 }
 
-func TestPluginMountFallback(t *testing.T) {
+func TestSkillMountFallback(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	session, _ := fs.NewSession("fallback-test", []string{"/toolfs/data"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
 	tmpDir, cleanup := setupTestDir(t)
 	defer cleanup()
 
 	fs.MountLocal("/data", tmpDir, false)
 
-	contentPlugin := &ContentPlugin{content: "Plugin content"}
-	pm.InjectPlugin(contentPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "content-plugin")
+	contentSkill := &ContentSkill{content: "Skill content"}
+	pm.InjectSkill(contentSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "content-skill")
 
 	// Test local mount still works
 	data, err := fs.ReadFile("/toolfs/data/test.txt")
@@ -1549,15 +1549,15 @@ func TestPluginMountFallback(t *testing.T) {
 		t.Errorf("Expected local file content, got: %s", string(data))
 	}
 
-	// Test plugin mount works
-	pluginData, err := fs.ReadFile("/toolfs/rag/test")
+	// Test skill mount works
+	skillData, err := fs.ReadFile("/toolfs/rag/test")
 	if err != nil {
-		t.Fatalf("ReadFile on plugin mount failed: %v", err)
+		t.Fatalf("ReadFile on skill mount failed: %v", err)
 	}
 
-	// ContentPlugin returns content directly as string
-	if string(pluginData) != "Plugin content" {
-		t.Errorf("Expected 'Plugin content', got '%s'", string(pluginData))
+	// ContentSkill returns content directly as string
+	if string(skillData) != "Skill content" {
+		t.Errorf("Expected 'Skill content', got '%s'", string(skillData))
 	}
 }
 
@@ -2295,91 +2295,91 @@ func TestSnapshotWithVirtualPaths(t *testing.T) {
 	}
 }
 
-// HostFSPlugin attempts to access host filesystem (should be blocked)
-type HostFSPlugin struct {
+// HostFSSkill attempts to access host filesystem (should be blocked)
+type HostFSSkill struct {
 	attemptedPath string
 }
 
-func (p *HostFSPlugin) Name() string                             { return "hostfs-plugin" }
-func (p *HostFSPlugin) Version() string                          { return "1.0.0" }
-func (p *HostFSPlugin) Init(config map[string]interface{}) error { return nil }
+func (p *HostFSSkill) Name() string                             { return "hostfs-skill" }
+func (p *HostFSSkill) Version() string                          { return "1.0.0" }
+func (p *HostFSSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *HostFSPlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *HostFSSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	json.Unmarshal(input, &request)
 	p.attemptedPath = request.Path
 
 	if request.Path == "/etc/passwd" {
-		response := PluginResponse{
+		response := SkillResponse{
 			Success: true,
 			Result:  "host file content (should not happen)",
 		}
 		return json.Marshal(response)
 	}
 
-	response := PluginResponse{
+	response := SkillResponse{
 		Success: true,
 		Result:  "normal operation",
 	}
 	return json.Marshal(response)
 }
 
-// PathTraversalPlugin attempts path traversal (should be blocked)
-type PathTraversalPlugin struct{}
+// PathTraversalSkill attempts path traversal (should be blocked)
+type PathTraversalSkill struct{}
 
-func (p *PathTraversalPlugin) Name() string                             { return "traversal-plugin" }
-func (p *PathTraversalPlugin) Version() string                          { return "1.0.0" }
-func (p *PathTraversalPlugin) Init(config map[string]interface{}) error { return nil }
+func (p *PathTraversalSkill) Name() string                             { return "traversal-skill" }
+func (p *PathTraversalSkill) Version() string                          { return "1.0.0" }
+func (p *PathTraversalSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *PathTraversalPlugin) Execute(input []byte) ([]byte, error) {
-	var request PluginRequest
+func (p *PathTraversalSkill) Execute(input []byte) ([]byte, error) {
+	var request SkillRequest
 	json.Unmarshal(input, &request)
 
 	if strings.Contains(request.Path, "..") {
-		response := PluginResponse{
+		response := SkillResponse{
 			Success: true,
 			Result:  "traversal succeeded (should not happen)",
 		}
 		return json.Marshal(response)
 	}
 
-	response := PluginResponse{
+	response := SkillResponse{
 		Success: true,
 		Result:  "normal operation",
 	}
 	return json.Marshal(response)
 }
 
-// StdoutStderrPlugin writes to stdout/stderr (should be captured)
-type StdoutStderrPlugin struct{}
+// StdoutStderrSkill writes to stdout/stderr (should be captured)
+type StdoutStderrSkill struct{}
 
-func (p *StdoutStderrPlugin) Name() string                             { return "stdio-plugin" }
-func (p *StdoutStderrPlugin) Version() string                          { return "1.0.0" }
-func (p *StdoutStderrPlugin) Init(config map[string]interface{}) error { return nil }
+func (p *StdoutStderrSkill) Name() string                             { return "stdio-skill" }
+func (p *StdoutStderrSkill) Version() string                          { return "1.0.0" }
+func (p *StdoutStderrSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *StdoutStderrPlugin) Execute(input []byte) ([]byte, error) {
+func (p *StdoutStderrSkill) Execute(input []byte) ([]byte, error) {
 	fmt.Println("This is stdout output")
 	fmt.Fprintf(os.Stderr, "This is stderr output\n")
 
-	response := PluginResponse{
+	response := SkillResponse{
 		Success: true,
 		Result:  "operation completed",
 	}
 	return json.Marshal(response)
 }
 
-// SlowExecPlugin is a plugin that takes time to execute (for sandbox tests)
-type SlowExecPlugin struct {
+// SlowExecSkill is a skill that takes time to execute (for sandbox tests)
+type SlowExecSkill struct {
 	delay time.Duration
 }
 
-func (p *SlowExecPlugin) Name() string                             { return "slow-exec-plugin" }
-func (p *SlowExecPlugin) Version() string                          { return "1.0.0" }
-func (p *SlowExecPlugin) Init(config map[string]interface{}) error { return nil }
+func (p *SlowExecSkill) Name() string                             { return "slow-exec-skill" }
+func (p *SlowExecSkill) Version() string                          { return "1.0.0" }
+func (p *SlowExecSkill) Init(config map[string]interface{}) error { return nil }
 
-func (p *SlowExecPlugin) Execute(input []byte) ([]byte, error) {
+func (p *SlowExecSkill) Execute(input []byte) ([]byte, error) {
 	time.Sleep(p.delay)
-	response := PluginResponse{
+	response := SkillResponse{
 		Success: true,
 		Result:  "slow operation completed",
 	}
@@ -2388,26 +2388,26 @@ func (p *SlowExecPlugin) Execute(input []byte) ([]byte, error) {
 
 func TestSandboxBlockHostFilesystemAccess(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("sandbox-test", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	hostFSPlugin := &HostFSPlugin{}
-	spm.InjectPlugin(hostFSPlugin, ctx, nil)
+	hostFSSkill := &HostFSSkill{}
+	spm.InjectSkill(hostFSSkill, ctx, nil)
 
 	config := DefaultSandboxConfig()
 	config.AllowHostFS = false
-	spm.SetSandboxConfig("hostfs-plugin", config)
+	spm.SetSandboxConfig("hostfs-skill", config)
 
-	request := &PluginRequest{
+	request := &SkillRequest{
 		Operation: "read_file",
 		Path:      "/etc/passwd",
 	}
 	input, _ := json.Marshal(request)
 
-	result, err := spm.ExecutePluginSandboxed("hostfs-plugin", input, ctx)
+	result, err := spm.ExecuteSkillSandboxed("hostfs-skill", input, ctx)
 	if err != nil {
 		// Error returned directly is also acceptable
 		return
@@ -2418,7 +2418,7 @@ func TestSandboxBlockHostFilesystemAccess(t *testing.T) {
 	}
 
 	if result.Success {
-		t.Error("Plugin should not succeed when accessing host filesystem")
+		t.Error("Skill should not succeed when accessing host filesystem")
 	}
 
 	if len(result.Violations) == 0 {
@@ -2439,25 +2439,25 @@ func TestSandboxBlockHostFilesystemAccess(t *testing.T) {
 
 func TestSandboxBlockPathTraversal(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("sandbox-test", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	traversalPlugin := &PathTraversalPlugin{}
-	spm.InjectPlugin(traversalPlugin, ctx, nil)
+	traversalSkill := &PathTraversalSkill{}
+	spm.InjectSkill(traversalSkill, ctx, nil)
 
 	config := DefaultSandboxConfig()
-	spm.SetSandboxConfig("traversal-plugin", config)
+	spm.SetSandboxConfig("traversal-skill", config)
 
-	request := &PluginRequest{
+	request := &SkillRequest{
 		Operation: "read_file",
 		Path:      "/toolfs/../../etc/passwd",
 	}
 	input, _ := json.Marshal(request)
 
-	result, err := spm.ExecutePluginSandboxed("traversal-plugin", input, ctx)
+	result, err := spm.ExecuteSkillSandboxed("traversal-skill", input, ctx)
 	if err != nil {
 		return
 	}
@@ -2467,7 +2467,7 @@ func TestSandboxBlockPathTraversal(t *testing.T) {
 	}
 
 	if result.Success {
-		t.Error("Plugin should not succeed with path traversal")
+		t.Error("Skill should not succeed with path traversal")
 	}
 
 	foundViolation := false
@@ -2484,17 +2484,17 @@ func TestSandboxBlockPathTraversal(t *testing.T) {
 
 func TestSandboxBlockSystemPaths(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("sandbox-test", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &HostFSPlugin{}
-	spm.InjectPlugin(plugin, ctx, nil)
+	skill := &HostFSSkill{}
+	spm.InjectSkill(skill, ctx, nil)
 
 	config := DefaultSandboxConfig()
-	spm.SetSandboxConfig("hostfs-plugin", config)
+	spm.SetSandboxConfig("hostfs-skill", config)
 
 	systemPaths := []string{
 		"/etc/passwd",
@@ -2504,13 +2504,13 @@ func TestSandboxBlockSystemPaths(t *testing.T) {
 	}
 
 	for _, sysPath := range systemPaths {
-		request := &PluginRequest{
+		request := &SkillRequest{
 			Operation: "read_file",
 			Path:      sysPath,
 		}
 		input, _ := json.Marshal(request)
 
-		result, err := spm.ExecutePluginSandboxed("hostfs-plugin", input, ctx)
+		result, err := spm.ExecuteSkillSandboxed("hostfs-skill", input, ctx)
 		if err != nil {
 			// Error returned is acceptable (path blocked)
 			continue
@@ -2534,7 +2534,7 @@ func TestSandboxBlockSystemPaths(t *testing.T) {
 
 func TestSandboxAllowToolFSPaths(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	tmpDir, cleanup := setupTestDir(t)
@@ -2542,27 +2542,27 @@ func TestSandboxAllowToolFSPaths(t *testing.T) {
 
 	fs.MountLocal("/data", tmpDir, false)
 	session, _ := fs.NewSession("sandbox-test", []string{"/toolfs/data"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	toolfsPlugin := &ContentPlugin{content: "ToolFS access"}
-	spm.InjectPlugin(toolfsPlugin, ctx, nil)
+	toolfsSkill := &ContentSkill{content: "ToolFS access"}
+	spm.InjectSkill(toolfsSkill, ctx, nil)
 
 	config := DefaultSandboxConfig()
-	spm.SetSandboxConfig("content-plugin", config)
+	spm.SetSandboxConfig("content-skill", config)
 
-	request := &PluginRequest{
+	request := &SkillRequest{
 		Operation: "read_file",
 		Path:      "/toolfs/data/test.txt",
 	}
 	input, _ := json.Marshal(request)
 
-	result, err := spm.ExecutePluginSandboxed("content-plugin", input, ctx)
+	result, err := spm.ExecuteSkillSandboxed("content-skill", input, ctx)
 	if err != nil {
 		t.Fatalf("ToolFS path access should be allowed: %v", err)
 	}
 
 	if !result.Success {
-		t.Error("Plugin should succeed when accessing ToolFS paths")
+		t.Error("Skill should succeed when accessing ToolFS paths")
 	}
 
 	if len(result.Violations) > 0 {
@@ -2572,23 +2572,23 @@ func TestSandboxAllowToolFSPaths(t *testing.T) {
 
 func TestSandboxCPUTimeout(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("sandbox-test", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	slowPlugin := &SlowExecPlugin{delay: 200 * time.Millisecond}
-	spm.InjectPlugin(slowPlugin, ctx, nil)
+	slowSkill := &SlowExecSkill{delay: 200 * time.Millisecond}
+	spm.InjectSkill(slowSkill, ctx, nil)
 
 	config := DefaultSandboxConfig()
 	config.CPUTimeout = 50 * time.Millisecond
-	spm.SetSandboxConfig("slow-exec-plugin", config)
+	spm.SetSandboxConfig("slow-exec-skill", config)
 
-	request := &PluginRequest{Operation: "test"}
+	request := &SkillRequest{Operation: "test"}
 	input, _ := json.Marshal(request)
 
-	result, err := spm.ExecutePluginSandboxed("slow-exec-plugin", input, ctx)
+	result, err := spm.ExecuteSkillSandboxed("slow-exec-skill", input, ctx)
 	if err == nil && result != nil && result.Success {
 		t.Log("Timeout may not trigger in this test environment")
 	}
@@ -2600,30 +2600,30 @@ func TestSandboxCPUTimeout(t *testing.T) {
 
 func TestSandboxCaptureStdoutStderr(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("sandbox-test", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	stdioPlugin := &StdoutStderrPlugin{}
-	spm.InjectPlugin(stdioPlugin, ctx, nil)
+	stdioSkill := &StdoutStderrSkill{}
+	spm.InjectSkill(stdioSkill, ctx, nil)
 
 	config := DefaultSandboxConfig()
 	config.CaptureStdout = true
 	config.CaptureStderr = true
-	spm.SetSandboxConfig("stdio-plugin", config)
+	spm.SetSandboxConfig("stdio-skill", config)
 
-	request := &PluginRequest{Operation: "test"}
+	request := &SkillRequest{Operation: "test"}
 	input, _ := json.Marshal(request)
 
-	result, err := spm.ExecutePluginSandboxed("stdio-plugin", input, ctx)
+	result, err := spm.ExecuteSkillSandboxed("stdio-skill", input, ctx)
 	if err != nil {
-		t.Fatalf("Plugin execution failed: %v", err)
+		t.Fatalf("Skill execution failed: %v", err)
 	}
 
 	if !result.Success {
-		t.Errorf("Plugin should succeed: %s", result.Error)
+		t.Errorf("Skill should succeed: %s", result.Error)
 	}
 
 	if !strings.Contains(result.Stdout, "stdout output") {
@@ -2637,27 +2637,27 @@ func TestSandboxCaptureStdoutStderr(t *testing.T) {
 
 func TestSandboxAuditLogging(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("audit-test", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
 	testLogger := &TestAuditLogger{Entries: []AuditLogEntry{}}
 
-	plugin := &ExamplePlugin{name: "audit-plugin", version: "1.0.0"}
-	spm.InjectPlugin(plugin, ctx, nil)
+	skill := &ExampleSkill{name: "audit-skill", version: "1.0.0"}
+	spm.InjectSkill(skill, ctx, nil)
 
 	config := DefaultSandboxConfig()
 	config.AuditLog = testLogger
-	spm.SetSandboxConfig("audit-plugin", config)
+	spm.SetSandboxConfig("audit-skill", config)
 
-	request := &PluginRequest{Operation: "test"}
+	request := &SkillRequest{Operation: "test"}
 	input, _ := json.Marshal(request)
 
-	result, err := spm.ExecutePluginSandboxed("audit-plugin", input, ctx)
+	result, err := spm.ExecuteSkillSandboxed("audit-skill", input, ctx)
 	if err != nil {
-		t.Fatalf("Plugin execution failed: %v", err)
+		t.Fatalf("Skill execution failed: %v", err)
 	}
 
 	if len(testLogger.Entries) == 0 {
@@ -2665,12 +2665,12 @@ func TestSandboxAuditLogging(t *testing.T) {
 	}
 
 	entry := testLogger.Entries[0]
-	if entry.Operation != "PluginExecute" {
-		t.Errorf("Expected operation 'PluginExecute', got '%s'", entry.Operation)
+	if entry.Operation != "SkillExecute" {
+		t.Errorf("Expected operation 'SkillExecute', got '%s'", entry.Operation)
 	}
 
-	if !strings.Contains(entry.Path, "audit-plugin") {
-		t.Errorf("Expected path to contain plugin name, got '%s'", entry.Path)
+	if !strings.Contains(entry.Path, "audit-skill") {
+		t.Errorf("Expected path to contain skill name, got '%s'", entry.Path)
 	}
 
 	if entry.SessionID != "audit-test" {
@@ -2708,25 +2708,25 @@ func TestSandboxDefaultConfig(t *testing.T) {
 
 func TestSandboxExecutionResult(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("result-test", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ExamplePlugin{name: "result-plugin", version: "1.0.0"}
-	spm.InjectPlugin(plugin, ctx, nil)
+	skill := &ExampleSkill{name: "result-skill", version: "1.0.0"}
+	spm.InjectSkill(skill, ctx, nil)
 
 	config := DefaultSandboxConfig()
-	spm.SetSandboxConfig("result-plugin", config)
+	spm.SetSandboxConfig("result-skill", config)
 
-	request := &PluginRequest{
+	request := &SkillRequest{
 		Operation: "test",
 		Path:      "/toolfs/data/test.txt",
 	}
 	input, _ := json.Marshal(request)
 
-	result, err := spm.ExecutePluginSandboxed("result-plugin", input, ctx)
+	result, err := spm.ExecuteSkillSandboxed("result-skill", input, ctx)
 	if err != nil {
 		t.Fatalf("Execution failed: %v", err)
 	}
@@ -2747,33 +2747,33 @@ func TestSandboxExecutionResult(t *testing.T) {
 		t.Error("Expected metadata to be set")
 	}
 
-	if result.Metadata["plugin_name"] != "result-plugin" {
-		t.Errorf("Expected plugin name in metadata")
+	if result.Metadata["skill_name"] != "result-skill" {
+		t.Errorf("Expected skill name in metadata")
 	}
 }
 
-func TestSandboxExecutePluginWithSandbox(t *testing.T) {
+func TestSandboxExecuteSkillWithSandbox(t *testing.T) {
 	sandbox := NewInMemorySandbox()
-	spm := NewSandboxedPluginManager(sandbox)
+	spm := NewSandboxedSkillManager(sandbox)
 
 	fs := NewToolFS("/toolfs")
 	session, _ := fs.NewSession("wraptest", []string{})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
-	plugin := &ContentPlugin{content: "wrapped result"}
-	spm.InjectPlugin(plugin, ctx, nil)
+	skill := &ContentSkill{content: "wrapped result"}
+	spm.InjectSkill(skill, ctx, nil)
 
 	config := DefaultSandboxConfig()
-	spm.SetSandboxConfig("content-plugin", config)
+	spm.SetSandboxConfig("content-skill", config)
 
-	request := &PluginRequest{
+	request := &SkillRequest{
 		Operation: "read_file",
 		Path:      "/toolfs/test.txt",
 	}
 
-	response, err := spm.ExecutePluginWithSandbox("content-plugin", request)
+	response, err := spm.ExecuteSkillWithSandbox("content-skill", request)
 	if err != nil {
-		t.Fatalf("ExecutePluginWithSandbox failed: %v", err)
+		t.Fatalf("ExecuteSkillWithSandbox failed: %v", err)
 	}
 
 	if !response.Success {
@@ -2781,23 +2781,23 @@ func TestSandboxExecutePluginWithSandbox(t *testing.T) {
 	}
 }
 
-func TestSearchMemoryAndExecutePlugin(t *testing.T) {
+func TestSearchMemoryAndExecuteSkill(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
-	session, _ := fs.NewSession("plugin-skill-test", []string{"/toolfs/rag", "/toolfs/memory"})
-	ctx := NewPluginContext(fs, session)
+	session, _ := fs.NewSession("skill-skill-test", []string{"/toolfs/rag", "/toolfs/memory"})
+	ctx := NewSkillContext(fs, session)
 
-	testPlugin := &ContentPlugin{content: "Plugin search result for ToolFS"}
-	pm.InjectPlugin(testPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "content-plugin")
+	testSkill := &ContentSkill{content: "Skill search result for ToolFS"}
+	pm.InjectSkill(testSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "content-skill")
 
 	fs.WriteFile("/toolfs/memory/test1", []byte("Memory entry about ToolFS"))
 
-	result, err := SearchMemoryAndExecutePlugin(fs, "ToolFS", "/toolfs/rag", session)
+	result, err := SearchMemoryAndExecuteSkill(fs, "ToolFS", "/toolfs/rag", session)
 	if err != nil {
-		t.Fatalf("SearchMemoryAndExecutePlugin failed: %v", err)
+		t.Fatalf("SearchMemoryAndExecuteSkill failed: %v", err)
 	}
 
 	if !result.Success {
@@ -2813,27 +2813,27 @@ func TestSearchMemoryAndExecutePlugin(t *testing.T) {
 	}
 }
 
-func TestChainOperationsWithPlugin(t *testing.T) {
+func TestChainOperationsWithSkill(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	tmpDir, cleanup := setupTestDir(t)
 	defer cleanup()
 	fs.MountLocal("/data", tmpDir, false)
 
-	session, _ := fs.NewSession("chain-plugin-test", []string{"/toolfs/data", "/toolfs/rag", "/toolfs/memory"})
-	ctx := NewPluginContext(fs, session)
+	session, _ := fs.NewSession("chain-skill-test", []string{"/toolfs/data", "/toolfs/rag", "/toolfs/memory"})
+	ctx := NewSkillContext(fs, session)
 
-	testPlugin := &ContentPlugin{content: "Plugin content from chain"}
-	pm.InjectPlugin(testPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "content-plugin")
+	testSkill := &ContentSkill{content: "Skill content from chain"}
+	pm.InjectSkill(testSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "content-skill")
 
 	fs.WriteFile("/toolfs/memory/chain1", []byte("Memory content for chain"))
 
 	operations := []Operation{
 		{Type: "search_memory", Query: "chain"},
-		{Type: "execute_plugin", PluginPath: "/toolfs/rag", Query: "chain"},
+		{Type: "execute_code_skill", SkillPath: "/toolfs/rag", Query: "chain"},
 		{Type: "read_file", Path: "/toolfs/data/test.txt"},
 	}
 
@@ -2846,35 +2846,35 @@ func TestChainOperationsWithPlugin(t *testing.T) {
 		t.Fatalf("Expected 3 results, got %d", len(results))
 	}
 
-	if results[1].Type != "plugin" {
-		t.Errorf("Expected plugin result, got '%s'", results[1].Type)
+	if results[1].Type != "code_skill" {
+		t.Errorf("Expected skill result, got '%s'", results[1].Type)
 	}
 	if !results[1].Success {
-		t.Errorf("Expected plugin success, got error: %s", results[1].Error)
+		t.Errorf("Expected skill success, got error: %s", results[1].Error)
 	}
 }
 
-func TestSearchMemoryAndExecutePluginFullChain(t *testing.T) {
+func TestSearchMemoryAndExecuteSkillFullChain(t *testing.T) {
 	fs := NewToolFS("/toolfs")
-	pm := NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	tmpDir, cleanup := setupTestDir(t)
 	defer cleanup()
 	fs.MountLocal("/data", tmpDir, false)
 
 	session, _ := fs.NewSession("full-skill-test", []string{"/toolfs/data", "/toolfs/rag", "/toolfs/memory"})
-	ctx := NewPluginContext(fs, session)
+	ctx := NewSkillContext(fs, session)
 
 	fs.WriteFile("/toolfs/memory/skill1", []byte("Memory entry: ToolFS skill API"))
 
-	testPlugin := &ContentPlugin{content: "RAG plugin result for skill API"}
-	pm.InjectPlugin(testPlugin, ctx, nil)
-	fs.MountPlugin("/toolfs/rag", "content-plugin")
+	testSkill := &ContentSkill{content: "RAG skill result for skill API"}
+	pm.InjectSkill(testSkill, ctx, nil)
+	fs.MountSkillExecutor("/toolfs/rag", "content-skill")
 
-	result, err := SearchMemoryAndExecutePlugin(fs, "skill API", "/toolfs/rag", session)
+	result, err := SearchMemoryAndExecuteSkill(fs, "skill API", "/toolfs/rag", session)
 	if err != nil {
-		t.Fatalf("SearchMemoryAndExecutePlugin failed: %v", err)
+		t.Fatalf("SearchMemoryAndExecuteSkill failed: %v", err)
 	}
 
 	if !result.Success {

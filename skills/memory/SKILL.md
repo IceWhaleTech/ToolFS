@@ -57,7 +57,7 @@ PUT /toolfs/memory/conversation-456
 Content-Type: application/json
 
 {
-  "content": "Discussed ToolFS architecture and plugin system",
+  "content": "Discussed ToolFS architecture and skill system",
   "metadata": {
     "topic": "toolfs",
     "participants": ["user", "agent"],

@@ -12,7 +12,7 @@ import (
 	"log"
 
 	"github.com/IceWhaleTech/toolfs"
-	rag_plugin "github.com/IceWhaleTech/toolfs/examples/rag_plugin"
+	rag_skill "github.com/IceWhaleTech/toolfs/examples/rag_skill"
 )
 
 func main() {
@@ -20,16 +20,16 @@ func main() {
 	fs := toolfs.NewToolFS("/toolfs")
 
 	// 2. 创建插件管理器
-	pm := toolfs.NewPluginManager()
-	fs.SetPluginManager(pm)
+	pm := toolfs.NewSkillExecutorManager()
+	fs.SetSkillExecutorManager(pm)
 
 	// 3. 创建并初始化 RAG 插件
-	ragPlugin := rag_plugin.NewRAGPlugin()
-	err := ragPlugin.Init(map[string]interface{}{
+	ragSkill := rag_skill.NewRAGSkill()
+	err := ragSkill.Init(map[string]interface{}{
 		"documents": []interface{}{
 			map[string]interface{}{
 				"id":      "doc1",
-				"content": "ToolFS provides secure file access for AI agents with plugin support",
+				"content": "ToolFS provides secure file access for AI agents with skill support",
 				"metadata": map[string]interface{}{
 					"source": "documentation",
 					"topic":  "introduction",
@@ -37,10 +37,10 @@ func main() {
 			},
 			map[string]interface{}{
 				"id":      "doc2",
-				"content": "WASM plugins enable sandboxed execution in ToolFS",
+				"content": "WASM skills enable sandboxed execution in ToolFS",
 				"metadata": map[string]interface{}{
 					"source": "documentation",
-					"topic":  "plugins",
+					"topic":  "skills",
 				},
 			},
 			map[string]interface{}{
@@ -54,31 +54,31 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("Failed to initialize plugin: %v", err)
+		log.Fatalf("Failed to initialize skill: %v", err)
 	}
 
 	// 4. 注入插件到插件管理器
-	ctx := toolfs.NewPluginContext(fs, nil)
-	pm.InjectPlugin(ragPlugin, ctx, nil)
+	ctx := toolfs.NewSkillContext(fs, nil)
+	pm.InjectSkill(ragSkill, ctx, nil)
 
 	// 5. 挂载插件到路径
-	err = fs.MountPlugin("/toolfs/rag", "rag-plugin")
+	err = fs.MountSkill("/toolfs/rag", "rag-skill")
 	if err != nil {
-		log.Fatalf("Failed to mount plugin: %v", err)
+		log.Fatalf("Failed to mount skill: %v", err)
 	}
 
-	fmt.Println("=== RAG Plugin Integration Example ===\n")
+	fmt.Println("=== RAG Skill Integration Example ===\n")
 
 	// 6. 通过文件系统 API 进行搜索
 	fmt.Println("1. Searching via ReadFile API:")
-	query := "ToolFS plugins"
+	query := "ToolFS skills"
 	data, err := fs.ReadFile(fmt.Sprintf("/toolfs/rag/query?text=%s", query))
 	if err != nil {
 		log.Fatalf("ReadFile failed: %v", err)
 	}
 
 	// 解析响应
-	var response toolfs.PluginResponse
+	var response toolfs.SkillResponse
 	if err := json.Unmarshal(data, &response); err != nil {
 		log.Fatalf("Failed to unmarshal response: %v", err)
 	}
@@ -111,8 +111,8 @@ func main() {
 	}
 	fmt.Printf("Entries: %v\n", entries)
 
-	fmt.Println("\n3. Using PluginManager directly:")
-	request := &toolfs.PluginRequest{
+	fmt.Println("\n3. Using SkillExecutorManager directly:")
+	request := &toolfs.SkillRequest{
 		Operation: "search",
 		Data: map[string]interface{}{
 			"query": "WASM sandbox",
@@ -120,13 +120,13 @@ func main() {
 		},
 	}
 
-	pluginResponse, err := pm.ExecutePlugin("rag-plugin", request)
+	skillResponse, err := pm.ExecuteSkill("rag-skill", request)
 	if err != nil {
-		log.Fatalf("ExecutePlugin failed: %v", err)
+		log.Fatalf("ExecuteSkill failed: %v", err)
 	}
 
-	if pluginResponse.Success {
-		if resultMap, ok := pluginResponse.Result.(map[string]interface{}); ok {
+	if skillResponse.Success {
+		if resultMap, ok := skillResponse.Result.(map[string]interface{}); ok {
 			if results, ok := resultMap["results"].([]interface{}); ok {
 				fmt.Printf("Found %d results for 'WASM sandbox':\n", len(results))
 				for i, r := range results {

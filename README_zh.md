@@ -216,10 +216,10 @@ scripts\benchmark_report.bat
   - [记忆技能](skills/memory/SKILL.md) - 持久化存储操作
   - [RAG 技能](skills/rag/SKILL.md) - 语义搜索操作
   - [文件系统技能](skills/filesystem/SKILL.md) - 文件和目录操作
-  - [插件技能](skills/plugin/SKILL.md) - 插件执行和管理
+  - [插件技能](skills/skill/SKILL.md) - 插件执行和管理
   - [快照技能](skills/snapshot/SKILL.md) - 状态管理操作
 - **[示例](examples/)** - 工作代码示例和集成案例
-  - [RAG 插件示例](examples/rag_plugin/README.md) - 完整的 RAG 插件实现
+  - [RAG 插件示例](examples/rag_skill/README.md) - 完整的 RAG 插件实现
 
 ## 🤔 常见问题
 

@@ -7,7 +7,7 @@
 插件已经通过以下方式导出：
 
 ```go
-var PluginInstance ToolFSPlugin = NewRAGPlugin()
+var SkillInstance SkillExecutor = NewRAGSkill()
 ```
 
 ## WASM 运行时集成
@@ -27,7 +27,7 @@ import (
 //go:embed rag.wasm
 var wasmFile embed.FS
 
-func LoadRAGPlugin() (ToolFSPlugin, error) {
+func LoadRAGSkill() (SkillExecutor, error) {
     ctx := context.Background()
     
     r := wazero.NewRuntime(ctx)
@@ -51,10 +51,10 @@ func LoadRAGPlugin() (ToolFSPlugin, error) {
     }
     
     // 获取导出的插件实例
-    pluginInstanceFunc := module.ExportedFunction("PluginInstance")
+    skillInstanceFunc := module.ExportedFunction("SkillInstance")
     // 这里需要根据实际的 WASM 导出方式调整
     
-    return plugin, nil
+    return skill, nil
 }
 ```
 
@@ -63,8 +63,8 @@ func LoadRAGPlugin() (ToolFSPlugin, error) {
 如果使用 Go 1.21+ 的 WASM 支持，可以使用 `go:wasmimport`：
 
 ```go
-//go:wasmimport env plugin_instance
-func wasmPluginInstance() uint32
+//go:wasmimport env skill_instance
+func wasmSkillInstance() uint32
 ```
 
 ### 运行时要求
@@ -72,7 +72,7 @@ func wasmPluginInstance() uint32
 WASM 插件需要以下运行时支持：
 
 1. **内存管理**：WASM 线性内存
-2. **函数导出**：`PluginInstance` 必须可导出
+2. **函数导出**：`SkillInstance` 必须可导出
 3. **JSON 序列化**：`encoding/json` 包需要在 WASM 中可用
 
 ## 编译注意事项
@@ -114,7 +114,7 @@ WebAssembly.instantiate(wasm).then(result => {
 
 如果 WASM 限制太大，可以考虑：
 
-1. **原生 Go 插件**：使用 `plugin` 包（仅 Linux/macOS）
+1. **原生 Go 插件**：使用 `skill` 包（仅 Linux/macOS）
 2. **gRPC 服务**：将插件作为独立服务运行
 3. **HTTP API**：通过 HTTP 调用插件服务
 

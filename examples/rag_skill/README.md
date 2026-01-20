@@ -1,10 +1,10 @@
-# RAG Plugin for ToolFS
+# RAG Skill for ToolFS
 
 这是一个示例 RAG (Retrieval-Augmented Generation) 插件，演示如何为 ToolFS 开发、编译和测试 WASM 插件。
 
 ## 功能特性
 
-- ✅ 实现 `ToolFSPlugin` 接口
+- ✅ 实现 `SkillExecutor` 接口
 - ✅ 内存向量数据库（支持真实向量数据库集成）
 - ✅ 语义搜索和关键词搜索
 - ✅ 返回 JSON 格式的搜索结果
@@ -14,10 +14,10 @@
 ## 项目结构
 
 ```
-rag_plugin/
-├── rag_plugin.go      # 主插件实现
+rag_skill/
+├── rag_skill.go      # 主插件实现
 ├── vector_db.go       # 向量数据库实现
-├── rag_plugin_test.go # 单元测试
+├── rag_skill_test.go # 单元测试
 ├── go.mod            # Go 模块定义
 ├── build.sh          # Linux/Mac 构建脚本
 ├── build.bat         # Windows 构建脚本
@@ -26,12 +26,12 @@ rag_plugin/
 
 ## 开发插件
 
-### 1. 实现 ToolFSPlugin 接口
+### 1. 实现 SkillExecutor 接口
 
 插件必须实现以下接口：
 
 ```go
-type ToolFSPlugin interface {
+type SkillExecutor interface {
     Name() string
     Version() string
     Init(config map[string]interface{}) error
@@ -60,12 +60,12 @@ config := map[string]interface{}{
         },
     },
 }
-plugin.Init(config)
+skill.Init(config)
 ```
 
 ### 3. 处理插件请求
 
-`Execute()` 方法接收 JSON 格式的 `PluginRequest`：
+`Execute()` 方法接收 JSON 格式的 `SkillRequest`：
 
 ```json
 {
@@ -78,7 +78,7 @@ plugin.Init(config)
 }
 ```
 
-必须返回 JSON 格式的 `PluginResponse`：
+必须返回 JSON 格式的 `SkillResponse`：
 
 ```json
 {
@@ -135,14 +135,14 @@ go build -o rag.wasm .
 在插件代码中，必须导出插件实例：
 
 ```go
-var PluginInstance ToolFSPlugin = NewRAGPlugin()
+var SkillInstance SkillExecutor = NewRAGSkill()
 ```
 
 WASM 运行时需要通过此导出访问插件。
 
 ## 注入插件到 ToolFS
 
-### 方法 1: 使用 PluginManager（推荐）
+### 方法 1: 使用 SkillExecutorManager（推荐）
 
 ```go
 package main
@@ -154,15 +154,15 @@ import (
 
 func main() {
     fs := toolfs.NewToolFS("/toolfs")
-    pm := toolfs.NewPluginManager()
+    pm := toolfs.NewSkillExecutorManager()
     
-    // 配置 WASM 加载器（需要实现 WASMPluginLoader 接口）
+    // 配置 WASM 加载器（需要实现 WASMSkillLoader 接口）
     // loader := NewWASMLoader() // 你的 WASM 加载器实现
     // pm.SetWASMLoader(loader)
     
     // 加载 WASM 插件
-    ctx := toolfs.NewPluginContext(fs, nil)
-    err := pm.LoadPlugin("rag.wasm", ctx, map[string]interface{}{
+    ctx := toolfs.NewSkillContext(fs, nil)
+    err := pm.LoadSkill("rag.wasm", ctx, map[string]interface{}{
         "documents": []interface{}{
             // 你的文档数据
         },
@@ -173,7 +173,7 @@ func main() {
     }
     
     // 使用插件
-    request := &toolfs.PluginRequest{
+    request := &toolfs.SkillRequest{
         Operation: "search",
         Data: map[string]interface{}{
             "query": "AI agents",
@@ -181,7 +181,7 @@ func main() {
         },
     }
     
-    response, err := pm.ExecutePlugin("rag-plugin", request)
+    response, err := pm.ExecuteSkill("rag-skill", request)
     // 处理响应...
 }
 ```
@@ -192,29 +192,29 @@ func main() {
 package main
 
 import (
-    "github.com/IceWhaleTech/toolfs/examples/rag_plugin"
+    "github.com/IceWhaleTech/toolfs/examples/rag_skill"
     "github.com/IceWhaleTech/toolfs"
 )
 
 func main() {
     fs := toolfs.NewToolFS("/toolfs")
-    pm := toolfs.NewPluginManager()
+    pm := toolfs.NewSkillExecutorManager()
     
-    ctx := toolfs.NewPluginContext(fs, nil)
+    ctx := toolfs.NewSkillContext(fs, nil)
     
     // 创建插件实例
-    plugin := rag_plugin.NewRAGPlugin()
-    plugin.Init(map[string]interface{}{
+    skill := rag_skill.NewRAGSkill()
+    skill.Init(map[string]interface{}{
         "documents": []interface{}{
             // 文档数据
         },
     })
     
     // 注入插件
-    pm.InjectPlugin(plugin, ctx, nil)
+    pm.InjectSkill(skill, ctx, nil)
     
     // 使用插件
-    request := &toolfs.PluginRequest{
+    request := &toolfs.SkillRequest{
         Operation: "search",
         Data: map[string]interface{}{
             "query": "ToolFS",
@@ -222,7 +222,7 @@ func main() {
         },
     }
     
-    response, err := pm.ExecutePlugin("rag-plugin", request)
+    response, err := pm.ExecuteSkill("rag-skill", request)
     // 处理响应...
 }
 ```
@@ -231,17 +231,17 @@ func main() {
 
 ```go
 fs := toolfs.NewToolFS("/toolfs")
-pm := toolfs.NewPluginManager()
-fs.SetPluginManager(pm)
+pm := toolfs.NewSkillExecutorManager()
+fs.SetSkillExecutorManager(pm)
 
 // 加载插件
-plugin := rag_plugin.NewRAGPlugin()
-plugin.Init(nil)
-ctx := toolfs.NewPluginContext(fs, nil)
-pm.InjectPlugin(plugin, ctx, nil)
+skill := rag_skill.NewRAGSkill()
+skill.Init(nil)
+ctx := toolfs.NewSkillContext(fs, nil)
+pm.InjectSkill(skill, ctx, nil)
 
 // 挂载插件到路径
-fs.MountPlugin("/toolfs/rag", "rag-plugin")
+fs.MountSkill("/toolfs/rag", "rag-skill")
 
 // 通过文件系统 API 访问
 data, err := fs.ReadFile("/toolfs/rag/query?text=AI")
@@ -251,7 +251,7 @@ data, err := fs.ReadFile("/toolfs/rag/query?text=AI")
 ## 运行测试
 
 ```bash
-cd examples/rag_plugin
+cd examples/rag_skill
 go test -v
 ```
 
@@ -291,7 +291,7 @@ func (db *VectorDatabase) Search(query string, topK int) []SearchResult {
 2. **使用 HTTP API 调用嵌入服务**（推荐）：
 
 ```go
-func (p *RAGPlugin) generateVector(text string) []float32 {
+func (p *RAGSkill) generateVector(text string) []float32 {
     // 调用嵌入 API
     resp, err := http.Post("https://api.openai.com/v1/embeddings", ...)
     // 解析响应获取向量
@@ -310,7 +310,7 @@ import (
     "encoding/json"
     "fmt"
     "github.com/IceWhaleTech/toolfs"
-    "github.com/IceWhaleTech/toolfs/examples/rag_plugin"
+    "github.com/IceWhaleTech/toolfs/examples/rag_skill"
 )
 
 func main() {
@@ -318,12 +318,12 @@ func main() {
     fs := toolfs.NewToolFS("/toolfs")
     
     // 2. 创建插件管理器
-    pm := toolfs.NewPluginManager()
-    fs.SetPluginManager(pm)
+    pm := toolfs.NewSkillExecutorManager()
+    fs.SetSkillExecutorManager(pm)
     
     // 3. 创建并初始化 RAG 插件
-    ragPlugin := rag_plugin.NewRAGPlugin()
-    err := ragPlugin.Init(map[string]interface{}{
+    ragSkill := rag_skill.NewRAGSkill()
+    err := ragSkill.Init(map[string]interface{}{
         "documents": []interface{}{
             map[string]interface{}{
                 "id":      "1",
@@ -336,11 +336,11 @@ func main() {
     }
     
     // 4. 注入插件
-    ctx := toolfs.NewPluginContext(fs, nil)
-    pm.InjectPlugin(ragPlugin, ctx, nil)
+    ctx := toolfs.NewSkillContext(fs, nil)
+    pm.InjectSkill(ragSkill, ctx, nil)
     
     // 5. 挂载插件到路径
-    fs.MountPlugin("/toolfs/rag", "rag-plugin")
+    fs.MountSkill("/toolfs/rag", "rag-skill")
     
     // 6. 通过文件系统 API 搜索
     data, err := fs.ReadFile("/toolfs/rag/query?text=ToolFS")
@@ -349,7 +349,7 @@ func main() {
     }
     
     // 7. 解析结果
-    var response toolfs.PluginResponse
+    var response toolfs.SkillResponse
     json.Unmarshal(data, &response)
     
     if response.Success {
@@ -369,7 +369,7 @@ func main() {
 
 ### 插件无法加载
 - 检查 WASM 文件是否正确编译
-- 验证 `PluginInstance` 是否正确导出
+- 验证 `SkillInstance` 是否正确导出
 - 确认 WASM 运行时配置正确
 
 ### 搜索结果为空

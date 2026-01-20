@@ -10,7 +10,7 @@
 
 ---
 
-**ToolFS** is an open-source virtual filesystem framework designed for large language model (LLM) agents in Go. Just as traditional filesystems provide file and directory abstractions for applications, ToolFS provides the storage abstractions that AI agents need: files, memory, RAG, plugins, and snapshots—all through a unified `/toolfs` namespace.
+**ToolFS** is an open-source virtual filesystem framework designed for large language model (LLM) agents in Go. Just as traditional filesystems provide file and directory abstractions for applications, ToolFS provides the storage abstractions that AI agents need: files, memory, RAG, skills, and snapshots—all through a unified `/toolfs` namespace.
 
 ## 🎯 What is ToolFS?
 
@@ -18,7 +18,7 @@ ToolFS is a virtual filesystem framework that provides a unified interface for L
 - **Local Filesystem**: Access mounted local directories with permission control
 - **Memory Store**: Persistent key-value storage for session data and context
 - **RAG System**: Semantic search over vector databases for document retrieval
-- **Plugin System**: Execute WASM-based plugins mounted to virtual paths
+- **Skill System**: Execute WASM-based skills mounted to virtual paths
 - **Snapshot Management**: Create point-in-time snapshots and restore previous states
 
 ![ToolFS Architecture](assets/toolfs%20internal%20arch.png)
@@ -29,11 +29,11 @@ ToolFS is a virtual filesystem framework that provides a unified interface for L
 
 ToolFS provides the following benefits for AI agent development:
 
-- **Unified Interface**: Single `/toolfs` namespace for all storage operations—files, memory, RAG, and plugins
+- **Unified Interface**: Single `/toolfs` namespace for all storage operations—files, memory, RAG, and skills
 - **Session Isolation**: Each agent session has isolated access with configurable permissions
 - **Auditability**: All operations are logged with session tracking for security and debugging
 - **Reproducibility**: Snapshot filesystem state at any point and restore later to reproduce exact execution states
-- **Extensibility**: Plugin system allows extending functionality with WASM modules
+- **Extensibility**: Skill system allows extending functionality with WASM modules
 - **Offline Capable**: Works fully offline without external dependencies
 - **Sandbox Ready**: Designed for safe execution in sandboxed environments
 
@@ -156,7 +156,7 @@ Benchmarks include the following operations:
 - **Memory Storage**: Memory write, read, list operations
 - **RAG Search**: Semantic search performance, TopK parameter impact
 - **Snapshot Operations**: Snapshot creation, rollback performance
-- **Plugin Execution**: Plugin invocation overhead
+- **Skill Execution**: Skill invocation overhead
 - **Concurrency Performance**: Multi-goroutine concurrent access performance
 - **Session Control**: Access control overhead
 
@@ -216,16 +216,16 @@ For detailed usage examples and advanced features, check out:
   - [Memory Skill](skills/memory/SKILL.md) - Persistent storage operations
   - [RAG Skill](skills/rag/SKILL.md) - Semantic search operations
   - [Filesystem Skill](skills/filesystem/SKILL.md) - File and directory operations
-  - [Plugin Skill](skills/plugin/SKILL.md) - Plugin execution and management
+  - [Skill Skill](skills/skill/SKILL.md) - Skill execution and management
   - [Snapshot Skill](skills/snapshot/SKILL.md) - State management operations
 - **[Examples](examples/)** - Working code examples and integrations
-  - [RAG Plugin Example](examples/rag_plugin/README.md) - Complete RAG plugin implementation
+  - [RAG Skill Example](examples/rag_skill/README.md) - Complete RAG skill implementation
 
 ## 🤔 FAQ
 
 ### How is ToolFS different from traditional filesystems?
 
-Traditional filesystems provide file and directory abstractions. ToolFS extends this with agent-specific abstractions: memory storage, RAG search, plugin execution, and snapshot management—all through a unified interface optimized for LLM agent workflows.
+Traditional filesystems provide file and directory abstractions. ToolFS extends this with agent-specific abstractions: memory storage, RAG search, skill execution, and snapshot management—all through a unified interface optimized for LLM agent workflows.
 
 ### Can I use ToolFS with containers or VMs?
 
@@ -235,9 +235,9 @@ Yes! ToolFS is designed to work in any environment, including containers, VMs, a
 
 ToolFS and AgentFS address similar problems but with different approaches:
 - **AgentFS**: SQLite-based filesystem with audit trails, designed for agent state management
-- **ToolFS**: Virtual filesystem with unified interface for files, memory, RAG, and plugins, designed for extensibility and plugin architecture
+- **ToolFS**: Virtual filesystem with unified interface for files, memory, RAG, and skills, designed for extensibility and skill architecture
 
-Both can be used together: AgentFS for structured state management, ToolFS for unified storage abstractions and plugin execution.
+Both can be used together: AgentFS for structured state management, ToolFS for unified storage abstractions and skill execution.
 
 ### Is ToolFS production-ready?
 
@@ -251,7 +251,7 @@ ToolFS is actively developed. Check the roadmap below for current development st
 - ✅ Phase 4: Skill API / Tool Using integration
 - ✅ Phase 5: Snapshot / rollback support
 - 🔄 Phase 6: Production hardening and performance optimization
-- 📋 Phase 7: Additional plugin ecosystem and integrations
+- 📋 Phase 7: Additional skill ecosystem and integrations
 
 ## 🙏 Inspired By
 
