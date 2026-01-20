@@ -90,14 +90,14 @@ func main() {
 
 ## ⚡ Performance
 
-Optimized for high-frequency agent loops. *Tested on Intel Xeon E5-2690 v2.*
+Optimized for high-frequency agent loops. *Tested on Apple M4 Pro.*
 
 | Operation | Throughput | Latency | Overhead |
 |-----------|-----------|---------|----------|
-| **Memory Access** | **1,000,000+ ops/s** | ~2 μs | 0 allocations |
-| **Path Resolution**| **14,000,000+ ops/s**| <100 ns | Cache-driven |
-| **RAG Search** | **460,000+ ops/s** | ~7 μs | Highly efficient |
-| **File I/O (1KB)** | **60,000+ ops/s** | ~50 μs | Local-first |
+| **Memory Access** | **1,200,000+ ops/s** | <1 μs | 0 allocations |
+| **Path Resolution**| **35,000,000+ ops/s**| <30 ns | Cache-driven |
+| **RAG Search** | **170,000+ ops/s** | ~6 μs | Highly efficient |
+| **File I/O (Small)** | **110,000+ ops/s** | ~9 μs | Local-first |
 
 ## 🧩 ToolFS vs. AgentFS
 
