@@ -31,7 +31,7 @@ ToolFS is organized into functional modules. Each module provides specific capab
 | **Memory** | `/toolfs/memory` | Persistent storage for session data and context | [Memory Skill](memory/SKILL.md) |
 | **RAG** | `/toolfs/rag` | Semantic search over vector databases | [RAG Skill](rag/SKILL.md) |
 | **Filesystem** | `/toolfs/<mount>` | Access to mounted local directories | [Filesystem Skill](filesystem/SKILL.md) |
-| **Skills** | `/toolfs/<skill>` | Execute WASM-based skills | [Skill Skill](skill/SKILL.md) |
+| **Code** | `/toolfs/<skill>` | Execute WASM or native skills | [Code Skill](code/SKILL.md) |
 | **Snapshots** | `/toolfs/snapshots` | Filesystem state snapshots and rollback | [Snapshot Skill](snapshot/SKILL.md) |
 
 ## Quick Start

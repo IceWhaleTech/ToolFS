@@ -62,9 +62,16 @@ func (sdm *SkillDocumentManager) RegisterDocument(path string, content string) e
 		return fmt.Errorf("failed to parse skill document at %s: %w", path, err)
 	}
 	doc.Path = path
+	// Use parent directory name if filename is SKILL.md
 	key := filepath.Base(path)
 	if strings.HasSuffix(key, ".md") {
 		key = strings.TrimSuffix(key, ".md")
+	}
+	if strings.ToUpper(key) == "SKILL" {
+		dir := filepath.Dir(path)
+		if dir != "." && dir != "skills" {
+			key = filepath.Base(dir)
+		}
 	}
 	sdm.documents[key] = doc
 	return nil

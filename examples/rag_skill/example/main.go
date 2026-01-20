@@ -2,7 +2,7 @@
 // +build ignore
 
 // This is an integration example showing how to use the RAG skill in ToolFS
-// Run: go run integration_example.go
+// Run: go run main.go
 
 package main
 
@@ -11,19 +11,15 @@ import (
 	"fmt"
 	"log"
 
-	toolfs "github.com/IceWhaleTech/toolfs"
-	rag_skill "github.com/IceWhaleTech/toolfs/examples/rag_skill"
+	"github.com/IceWhaleTech/toolfs"
+	"github.com/IceWhaleTech/toolfs/examples/rag_skill"
 )
 
 func main() {
 	// 1. Create ToolFS instance
 	fs := toolfs.NewToolFS("/toolfs")
 
-	// 2. Create skill executor manager
-	pm := toolfs.NewSkillExecutorManager()
-	fs.SetSkillExecutorManager(pm)
-
-	// 3. Create and initialize RAG skill
+	// 2. Create and initialize RAG skill
 	ragSkill := rag_skill.NewRAGSkill()
 	err := ragSkill.Init(map[string]interface{}{
 		"documents": []interface{}{
@@ -57,27 +53,32 @@ func main() {
 		log.Fatalf("Failed to initialize skill: %v", err)
 	}
 
-	// 4. Inject skill into manager
-	ctx := toolfs.NewSkillContext(fs, nil)
-	pm.InjectSkill(ragSkill, ctx, nil)
+	// 3. Register code skill with ToolFS
+	// This automatically handles doc management and execution registration
+	skill, err := fs.RegisterCodeSkill(ragSkill, "/toolfs/rag")
+	if err != nil {
+		log.Fatalf("Failed to register skill: %v", err)
+	}
 
-	// 5. Mount skill to virtual path
-	err = fs.MountSkill("/toolfs/rag", "rag-skill")
+	// 4. Mount skill (RegisterCodeSkill already assigns the mount path, but we could explicitly mount it)
+	err = fs.MountSkill(skill)
 	if err != nil {
 		log.Fatalf("Failed to mount skill: %v", err)
 	}
 
 	fmt.Println("=== RAG Skill Integration Example ===\n")
 
-	// 6. Search via Filesystem API
+	// 5. Search via Filesystem API
 	fmt.Println("1. Searching via ReadFile API:")
 	query := "ToolFS skills"
+	// ToolFS handles the query parameters and routes them to the skill
 	data, err := fs.ReadFile(fmt.Sprintf("/toolfs/rag/query?text=%s", query))
 	if err != nil {
 		log.Fatalf("ReadFile failed: %v", err)
 	}
 
 	// Parse response
+	// Skills return SkillResponse as JSON when called via ReadFile
 	var response toolfs.SkillResponse
 	if err := json.Unmarshal(data, &response); err != nil {
 		log.Fatalf("Failed to unmarshal response: %v", err)
@@ -111,7 +112,8 @@ func main() {
 	}
 	fmt.Printf("Entries: %v\n", entries)
 
-	fmt.Println("\n3. Using SkillExecutorManager directly:")
+	fmt.Println("\n3. Using ExecuteSkill directly:")
+	// We can also call ExecuteSkill on the ToolFS instance
 	request := &toolfs.SkillRequest{
 		Operation: "search",
 		Data: map[string]interface{}{
@@ -119,14 +121,20 @@ func main() {
 			"top_k": 2,
 		},
 	}
+	requestBytes, _ := json.Marshal(request)
 
-	skillResponse, err := pm.ExecuteSkill("rag-skill", request)
+	outputBytes, err := fs.ExecuteSkill("rag-skill", requestBytes, nil)
 	if err != nil {
 		log.Fatalf("ExecuteSkill failed: %v", err)
 	}
 
-	if skillResponse.Success {
-		if resultMap, ok := skillResponse.Result.(map[string]interface{}); ok {
+	var directResponse toolfs.SkillResponse
+	if err := json.Unmarshal(outputBytes, &directResponse); err != nil {
+		log.Fatalf("Failed to unmarshal direct response: %v", err)
+	}
+
+	if directResponse.Success {
+		if resultMap, ok := directResponse.Result.(map[string]interface{}); ok {
 			if results, ok := resultMap["results"].([]interface{}); ok {
 				fmt.Printf("Found %d results for 'WASM sandbox':\n", len(results))
 				for i, r := range results {

@@ -8,16 +8,16 @@ import (
 	toolfs "github.com/IceWhaleTech/toolfs"
 )
 
-// 演示如何使用统一的 Skill API
+// Demonstrates how to use the unified Skill API
 
 func main() {
-	fmt.Println("=== ToolFS 统一 Skill 系统演示 ===")
+	fmt.Println("=== ToolFS Unified Skill System Demo ===")
 
 	// Create ToolFS instance
 	fs := toolfs.NewToolFS("/toolfs")
 
 	// Example 1: Register code skill
-	fmt.Println("1. 注册代码 Skill")
+	fmt.Println("1. Registering Code Skill")
 	dataProcessor := &DataProcessorSkill{
 		name:    "data-processor",
 		version: "1.0.0",
@@ -25,13 +25,13 @@ func main() {
 
 	codeSkill, err := fs.RegisterCodeSkill(dataProcessor, "/toolfs/skills/data-processor")
 	if err != nil {
-		log.Printf("注册代码技能失败: %v", err)
+		log.Printf("Failed to register code skill: %v", err)
 	} else {
-		fmt.Printf("   ✓ 注册成功: %s [%s]\n", codeSkill.Name, codeSkill.Type)
+		fmt.Printf("   ✓ Registration successful: %s [%s]\n", codeSkill.Name, codeSkill.Type)
 	}
 
 	// Example 2: Register another code skill
-	fmt.Println("\n2. 注册更多代码 Skills")
+	fmt.Println("\n2. Registering more Code Skills")
 	mlAnalyzer := &MLAnalyzerSkill{
 		name:    "ml-analyzer",
 		version: "2.0.0",
@@ -39,29 +39,29 @@ func main() {
 
 	mlSkill, err := fs.RegisterCodeSkill(mlAnalyzer, "/toolfs/skills/ml-analyzer")
 	if err != nil {
-		log.Printf("注册代码技能失败: %v", err)
+		log.Printf("Failed to register code skill: %v", err)
 	} else {
-		fmt.Printf("   ✓ 注册成功: %s [%s]\n", mlSkill.Name, mlSkill.Type)
+		fmt.Printf("   ✓ Registration successful: %s [%s]\n", mlSkill.Name, mlSkill.Type)
 	}
 
-	// 示例 3: 列出所有 Skills（不区分类型）
-	fmt.Println("\n3. 列出所有 Skills")
+	// Example 3: List all Skills (regardless of type)
+	fmt.Println("\n3. List all Skills")
 	allSkills := fs.ListSkills()
-	fmt.Printf("   共 %d 个 skills:\n", len(allSkills))
+	fmt.Printf("   Total %d skills:\n", len(allSkills))
 	for _, skill := range allSkills {
 		fmt.Printf("   - %s [%s] @ %s\n", skill.Name, skill.Type, skill.Path)
 	}
 
-	// 示例 4: 按类型过滤
-	fmt.Println("\n4. 按类型过滤 Skills")
+	// Example 4: Filter by type
+	fmt.Println("\n4. Filter Skills by type")
 	codeSkills := fs.ListSkillsByType(toolfs.SkillTypeCode)
-	fmt.Printf("   插件类型 skills: %d 个\n", len(codeSkills))
+	fmt.Printf("   Code type skills: %d\n", len(codeSkills))
 	for _, skill := range codeSkills {
 		fmt.Printf("   - %s (v%s)\n", skill.Name, skill.Metadata["version"])
 	}
 
-	// 示例 5: 初始化 Skills
-	fmt.Println("\n5. 初始化 Skills")
+	// Example 5: Initialize Skills
+	fmt.Println("\n5. Initialize Skills")
 	config := map[string]interface{}{
 		"timeout":      5000,
 		"memory_limit": 1024 * 1024,
@@ -70,53 +70,53 @@ func main() {
 	for _, skill := range codeSkills {
 		err := fs.InitializeSkill(skill.Name, config)
 		if err != nil {
-			log.Printf("   初始化 %s 失败: %v", skill.Name, err)
+			log.Printf("   Failed to initialize %s: %v", skill.Name, err)
 		} else {
-			fmt.Printf("   ✓ 初始化成功: %s\n", skill.Name)
+			fmt.Printf("   ✓ Initialization successful: %s\n", skill.Name)
 		}
 	}
 
-	// 示例 6: 执行 Skills
-	fmt.Println("\n6. 执行 Skills")
+	// Example 6: Execute Skills
+	fmt.Println("\n6. Execute Skills")
 	input := []byte(`{"operation": "process", "data": "test data"}`)
 
 	result, err := fs.ExecuteSkill("data-processor", input, nil)
 	if err != nil {
-		log.Printf("   执行失败: %v", err)
+		log.Printf("   Execution failed: %v", err)
 	} else {
-		fmt.Printf("   ✓ 执行结果: %s\n", string(result))
+		fmt.Printf("   ✓ Execution result: %s\n", string(result))
 	}
 
-	// 示例 7: 挂载 Skills
-	fmt.Println("\n7. 挂载 Skills 到 ToolFS")
+	// Example 7: Mount Skills
+	fmt.Println("\n7. Mount Skills to ToolFS")
 	for _, skill := range codeSkills {
 		err := fs.MountSkill(skill)
 		if err != nil {
-			log.Printf("   挂载 %s 失败: %v", skill.Name, err)
+			log.Printf("   Failed to mount %s: %v", skill.Name, err)
 		} else {
-			fmt.Printf("   ✓ 已挂载: %s -> %s\n", skill.Name, skill.Path)
+			fmt.Printf("   ✓ Mounted: %s -> %s\n", skill.Name, skill.Path)
 		}
 	}
 
-	// 示例 8: 获取特定 Skill 的详细信息
-	fmt.Println("\n8. 获取 Skill 详细信息")
+	// Example 8: Get specific Skill details
+	fmt.Println("\n8. Get Skill details")
 	skill, err := fs.GetSkill("data-processor")
 	if err != nil {
-		log.Printf("   获取失败: %v", err)
+		log.Printf("   Failed to get skill: %v", err)
 	} else {
-		fmt.Printf("   名称: %s\n", skill.Name)
-		fmt.Printf("   类型: %s\n", skill.Type)
-		fmt.Printf("   路径: %s\n", skill.Path)
-		fmt.Printf("   描述: %s\n", skill.Description)
+		fmt.Printf("   Name: %s\n", skill.Name)
+		fmt.Printf("   Type: %s\n", skill.Type)
+		fmt.Printf("   Path: %s\n", skill.Path)
+		fmt.Printf("   Description: %s\n", skill.Description)
 		if skill.Document != nil {
-			fmt.Printf("   文档: %s\n", skill.Document.Description)
+			fmt.Printf("   Document: %s\n", skill.Document.Description)
 		}
 	}
 
-	fmt.Println("\n=== 演示完成 ===")
+	fmt.Println("\n=== Demo Complete ===")
 }
 
-// DataProcessorSkill 是一个示例插件
+// DataProcessorSkill is an example code skill
 type DataProcessorSkill struct {
 	name    string
 	version string
@@ -133,46 +133,46 @@ func (p *DataProcessorSkill) Version() string {
 
 func (p *DataProcessorSkill) Init(config map[string]interface{}) error {
 	p.config = config
-	fmt.Printf("   [%s] 配置已加载\n", p.name)
+	fmt.Printf("   [%s] Config loaded\n", p.name)
 	return nil
 }
 
 func (p *DataProcessorSkill) Execute(input []byte) ([]byte, error) {
-	// 解析输入
+	// Parse input
 	var req map[string]interface{}
 	json.Unmarshal(input, &req)
 
-	// 处理数据
+	// Process data
 	result := map[string]interface{}{
 		"success": true,
-		"message": fmt.Sprintf("已处理: %v", req["data"]),
+		"message": fmt.Sprintf("Processed: %v", req["data"]),
 		"code":    p.name,
 	}
 
 	return json.Marshal(result)
 }
 
-// GetSkillDocument 实现 SkillDocumentProvider 接口
+// GetSkillDocument implements SkillDocumentProvider interface
 func (p *DataProcessorSkill) GetSkillDocument() string {
 	return `---
 name: data-processor
-description: 数据处理插件。当用户需要对原始数据进行清洗、转换或格式化时使用此技能，例如：“帮我清洗这段数据”、“将此 JSON 转换为 CSV” 或 “处理最近的日志文件”。
+description: Data processing skill. Use this when the user needs to clean, transform, or format raw data, such as "Format this JSON", "Clean this CSV", or "Process recent logs".
 version: 1.0.0
 ---
 
 # Data Processor
 
-这是一个数据处理插件，可以处理各种数据格式。
+A skill for processing various data formats.
 
-## 功能
+## Features
 
-- 数据转换
-- 数据验证
-- 数据清洗
+- Data Transformation
+- Data Validation
+- Data Cleaning
 `
 }
 
-// MLAnalyzerSkill 是另一个示例插件
+// MLAnalyzerSkill is another example code skill
 type MLAnalyzerSkill struct {
 	name    string
 	version string
@@ -189,14 +189,14 @@ func (p *MLAnalyzerSkill) Version() string {
 
 func (p *MLAnalyzerSkill) Init(config map[string]interface{}) error {
 	p.config = config
-	fmt.Printf("   [%s] 配置已加载\n", p.name)
+	fmt.Printf("   [%s] Config loaded\n", p.name)
 	return nil
 }
 
 func (p *MLAnalyzerSkill) Execute(input []byte) ([]byte, error) {
 	result := map[string]interface{}{
 		"success": true,
-		"message": "ML 分析完成",
+		"message": "ML analysis complete",
 		"code":    p.name,
 	}
 	return json.Marshal(result)
@@ -205,18 +205,18 @@ func (p *MLAnalyzerSkill) Execute(input []byte) ([]byte, error) {
 func (p *MLAnalyzerSkill) GetSkillDocument() string {
 	return `---
 name: ml-analyzer
-description: 机器学习分析插件。当用户需要执行预测、分类或复杂数据模式识别时使用此技能，例如：“分析这些数据的趋势”、“对这些用户进行分类” 或 “预测下个月的销售额”。
+description: Machine learning analysis skill. Use this when the user needs to perform predictions, classification, or complex data pattern recognition, such as "Analyze the trend", "Classify these users", or "Predict next month's sales".
 version: 2.0.0
 ---
 
 # ML Analyzer
 
-机器学习分析工具。
+Machine learning analysis tools.
 
-## 功能
+## Features
 
-- 模型推理
-- 数据分析
-- 特征提取
+- Model Inference
+- Data Analysis
+- Feature Extraction
 `
 }

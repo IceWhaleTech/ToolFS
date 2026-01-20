@@ -1,4 +1,4 @@
-package main
+package rag_skill
 
 import (
 	"encoding/json"
@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-// 为了能够在 WASM 中运行，我们不能直接导入 toolfs 包
-// 所以我们需要定义接口和类型
+// To run in WASM, we cannot directly import toolfs package
+// So we need to define interfaces and types
 
-// SkillExecutor 是插件必须实现的接口
+// SkillExecutor is the interface that skills must implement
 type SkillExecutor interface {
 	Name() string
 	Version() string
@@ -19,14 +19,14 @@ type SkillExecutor interface {
 	Execute(input []byte) ([]byte, error)
 }
 
-// SkillRequest 表示插件执行请求
+// SkillRequest represents a skill execution request
 type SkillRequest struct {
 	Operation string                 `json:"operation"`
 	Path      string                 `json:"path"`
 	Data      map[string]interface{} `json:"data"`
 }
 
-// SkillResponse 表示插件执行响应
+// SkillResponse represents a skill execution response
 type SkillResponse struct {
 	Success  bool                   `json:"success"`
 	Result   interface{}            `json:"result,omitempty"`
@@ -34,7 +34,7 @@ type SkillResponse struct {
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// Document 表示向量数据库中的文档
+// Document represents a document in the vector database
 type Document struct {
 	ID       string                 `json:"id"`
 	Content  string                 `json:"content"`
@@ -42,13 +42,13 @@ type Document struct {
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// SearchResult 表示搜索结果
+// SearchResult represents a search result
 type SearchResult struct {
 	Document Document `json:"document"`
 	Score    float32  `json:"score"`
 }
 
-// SearchResponse 表示搜索响应
+// SearchResponse represents a search response
 type SearchResponse struct {
 	Query   string         `json:"query"`
 	TopK    int            `json:"top_k"`
@@ -56,7 +56,7 @@ type SearchResponse struct {
 	Count   int            `json:"count"`
 }
 
-// RAGSkill 实现 RAG 搜索插件
+// RAGSkill implements RAG search skill
 type RAGSkill struct {
 	name        string
 	version     string
@@ -64,7 +64,7 @@ type RAGSkill struct {
 	initialized bool
 }
 
-// NewRAGSkill 创建新的 RAG 插件实例
+// NewRAGSkill creates a new RAG skill instance
 func NewRAGSkill() *RAGSkill {
 	return &RAGSkill{
 		name:     "rag-skill",
@@ -73,19 +73,19 @@ func NewRAGSkill() *RAGSkill {
 	}
 }
 
-// Name 返回插件名称
+// Name returns the skill name
 func (p *RAGSkill) Name() string {
 	return p.name
 }
 
-// Version 返回插件版本
+// Version returns the skill version
 func (p *RAGSkill) Version() string {
 	return p.version
 }
 
-// Init 初始化插件
+// Init initializes the skill
 func (p *RAGSkill) Init(config map[string]interface{}) error {
-	// 从配置中加载文档数据（如果提供）
+	// Load document data from config (if provided)
 	if docs, ok := config["documents"].([]interface{}); ok {
 		for _, doc := range docs {
 			if docMap, ok := doc.(map[string]interface{}); ok {
@@ -97,14 +97,14 @@ func (p *RAGSkill) Init(config map[string]interface{}) error {
 				if metadata, ok := docMap["metadata"].(map[string]interface{}); ok {
 					document.Metadata = metadata
 				}
-				// 生成简单的向量（实际应该使用嵌入模型）
+				// Generate simple vector (in reality, an embedding model should be used)
 				document.Vector = p.generateVector(document.Content)
 				p.vectorDB.AddDocument(document)
 			}
 		}
 	}
 
-	// 如果没有提供文档，加载一些默认示例文档
+	// If no documents were provided, load some default example documents
 	if p.vectorDB.Count() == 0 {
 		p.loadDefaultDocuments()
 	}
@@ -113,7 +113,7 @@ func (p *RAGSkill) Init(config map[string]interface{}) error {
 	return nil
 }
 
-// Execute 执行插件操作
+// Execute performs skill operation
 func (p *RAGSkill) Execute(input []byte) ([]byte, error) {
 	if !p.initialized {
 		return nil, errors.New("skill not initialized, call Init() first")
@@ -134,9 +134,9 @@ func (p *RAGSkill) Execute(input []byte) ([]byte, error) {
 	}
 }
 
-// handleSearch 处理搜索请求
+// handleSearch handles search request
 func (p *RAGSkill) handleSearch(request SkillRequest) ([]byte, error) {
-	// 从 Data 中提取查询和 top_k
+	// Extract query and top_k from Data
 	query := ""
 	topK := 5
 
@@ -146,7 +146,7 @@ func (p *RAGSkill) handleSearch(request SkillRequest) ([]byte, error) {
 		} else if q, ok := request.Data["input"].(string); ok && q != "" {
 			query = q
 		} else if request.Path != "" {
-			// 从路径中提取查询参数
+			// Extract query parameter from path
 			if idx := strings.Index(request.Path, "?text="); idx != -1 {
 				query = request.Path[idx+6:]
 			} else if idx := strings.Index(request.Path, "?q="); idx != -1 {
@@ -169,10 +169,10 @@ func (p *RAGSkill) handleSearch(request SkillRequest) ([]byte, error) {
 		topK = 5
 	}
 	if topK > 100 {
-		topK = 100 // 限制最大 top_k
+		topK = 100 // limit maximum top_k
 	}
 
-	// 执行向量搜索
+	// Perform vector search
 	results := p.vectorDB.Search(query, topK)
 
 	response := SearchResponse{
@@ -194,7 +194,7 @@ func (p *RAGSkill) handleSearch(request SkillRequest) ([]byte, error) {
 	return json.Marshal(skillResponse)
 }
 
-// handleListDir 处理目录列表请求
+// handleListDir handles directory list request
 func (p *RAGSkill) handleListDir() ([]byte, error) {
 	response := SkillResponse{
 		Success: true,
@@ -205,27 +205,27 @@ func (p *RAGSkill) handleListDir() ([]byte, error) {
 	return json.Marshal(response)
 }
 
-// GetSkillDocument 实现 SkillDocumentProvider 接口
+// GetSkillDocument implements SkillDocumentProvider interface
 func (p *RAGSkill) GetSkillDocument() string {
 	return `---
 name: rag-skill
-description: 自定义 RAG 搜索插件。当用户需要从特定文档库中检索信息、执行语义搜索或回答基于知识库的问题时使用此技能，例如：“在文档库中搜索 X”、“基于知识库回答这个问题” 或 “寻找与 Y 相关的参考资料”。
+description: Custom RAG search skill. Use this when the user needs to retrieve information from a specific document base, perform semantic search, or answer questions based on a knowledge base, such as "Search document base for X", "Answer this question based on knowledge base", or "Find references related to Y".
 version: 1.0.0
 ---
 
 # RAG Skill
 
-这是一个自定义的 RAG (检索增强生成) 插件，演示了如何在 ToolFS 中实现语义搜索功能。
+A custom RAG (Retrieval-Augmented Generation) skill illustrating semantic search in ToolFS.
 
-## 功能
+## Features
 
-- 向量搜索
-- 文档检索
-- 简单的语义匹配
+- Vector Search
+- Document Retrieval
+- Simple Semantic Matching
 `
 }
 
-// errorResponse 创建错误响应
+// errorResponse creates error response
 func (p *RAGSkill) errorResponse(message string) []byte {
 	response := SkillResponse{
 		Success: false,
@@ -235,11 +235,8 @@ func (p *RAGSkill) errorResponse(message string) []byte {
 	return data
 }
 
-// generateVector 为文本生成简单的向量表示（模拟嵌入）
-// 在实际应用中，应该使用真正的嵌入模型（如 OpenAI, Sentence-BERT 等）
+// generateVector generates a simple vector representation for text (mock embedding)
 func (p *RAGSkill) generateVector(text string) []float32 {
-	// 简单的基于字符频率的向量生成（仅用于演示）
-	// 实际应该使用真实的嵌入模型
 	vector := make([]float32, 128)
 	text = strings.ToLower(text)
 
@@ -247,7 +244,7 @@ func (p *RAGSkill) generateVector(text string) []float32 {
 		vector[i] = float32(text[i%len(text)]) / 255.0
 	}
 
-	// 归一化向量
+	// Normalize vector
 	magnitude := float32(0)
 	for _, v := range vector {
 		magnitude += v * v
@@ -263,7 +260,7 @@ func (p *RAGSkill) generateVector(text string) []float32 {
 	return vector
 }
 
-// loadDefaultDocuments 加载默认示例文档
+// loadDefaultDocuments loads default example documents
 func (p *RAGSkill) loadDefaultDocuments() {
 	defaultDocs := []Document{
 		{
@@ -314,7 +311,7 @@ func (p *RAGSkill) loadDefaultDocuments() {
 	}
 }
 
-// getString 从 map 中安全获取字符串
+// getString gets string from map safely
 func getString(m map[string]interface{}, key string) string {
 	if v, ok := m[key].(string); ok {
 		return v
@@ -322,5 +319,5 @@ func getString(m map[string]interface{}, key string) string {
 	return ""
 }
 
-// 导出插件实例（用于 WASM 导出）
+// SkillInstance is the exported skill instance for WASM execution
 var SkillInstance SkillExecutor = NewRAGSkill()
