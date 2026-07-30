@@ -1,0 +1,10 @@
+# 文档快照与临时打包产物（内容随时可从 docs/ 重新生成）
+docs/*.zip
+
+# macOS
+.DS_Store
+._*
+
+# Go 构建与测试产物
+*.test
+/toolfsd

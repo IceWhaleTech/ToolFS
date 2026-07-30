@@ -24,8 +24,9 @@ type SandboxConfig struct {
 }
 
 // DefaultSandboxConfig returns a safe default sandbox configuration
-// stdioHijackMu 串行化对 os.Stdout/os.Stderr 的临时改写。
-// 这些是进程全局变量，并发劫持会互相覆盖保存的原值，导致永久性错乱。
+// stdioHijackMu serializes the temporary reassignment of os.Stdout/os.Stderr.
+// Those are process-global; concurrent hijacks would clobber each other's saved
+// originals and leave the process permanently redirected.
 var stdioHijackMu sync.Mutex
 
 func DefaultSandboxConfig() *SandboxConfig {
@@ -110,10 +111,12 @@ func (s *InMemorySandbox) Execute(executor SkillExecutor, input []byte, config *
 		defer cancel()
 	}
 
-	// 捕获技能输出需要临时改写 os.Stdout/os.Stderr —— 这是【进程全局】状态。
-	// SkillExecutor.Execute(input []byte) 没有 writer 参数，因此无法避免劫持；
-	// 但可以做到两件事：(a) 全程串行，避免并发劫持互相覆盖保存的原值；
-	// (b) 在本函数返回前同步还原，而不是在异步 goroutine 里还原（S5）。
+	// Capturing skill output requires reassigning os.Stdout/os.Stderr, which is
+	// process-global state. SkillExecutor.Execute(input []byte) takes no writer,
+	// so the hijack cannot be avoided outright — but two things can be fixed:
+	// (a) serialize it, so concurrent hijacks cannot clobber the saved originals;
+	// (b) restore synchronously before returning, rather than from a goroutine
+	//     that may outlive the call.
 	if config.CaptureStdout || config.CaptureStderr {
 		stdioHijackMu.Lock()
 		defer stdioHijackMu.Unlock()
@@ -161,8 +164,8 @@ func (s *InMemorySandbox) Execute(executor SkillExecutor, input []byte, config *
 		}()
 	}
 
-	// 同步还原：defer 在本函数返回时执行，此时仍持有 stdioHijackMu，
-	// 因此还原与下一次劫持之间不会交错。
+	// Synchronous restore: this defer runs while stdioHijackMu is still held, so
+	// the restore cannot interleave with the next hijack.
 	defer func() {
 		if originalStdout != nil {
 			os.Stdout = originalStdout

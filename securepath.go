@@ -1,11 +1,13 @@
 package toolfs
 
-// descriptor-based 安全 IO（设计稿 §4.2）。
+// Descriptor-based secure IO.
 //
-// 为什么不能只用 filepath.EvalSymlinks + containment 校验：
-// 校验与使用之间存在窗口，父目录或软链可被 SMB、其他本机进程或并发 agent 替换（TOCTOU）；
-// O_NOFOLLOW 也只保护最终一个分量。因此本层不把「解析后的路径字符串」当作安全句柄，
-// 而是以挂载点根目录的 dirfd 为锚，所有实际 IO 都从该 fd 出发。
+// Why filepath.EvalSymlinks plus a containment check is not enough: between the
+// check and the use, a parent directory or symlink can be replaced by SMB, by
+// another local process, or by a concurrent agent (TOCTOU); O_NOFOLLOW only
+// protects the final component. This layer therefore never treats a resolved
+// path string as a security handle. It anchors on the mount root's directory
+// descriptor and issues every real IO from there.
 
 import (
 	"io"
@@ -13,39 +15,41 @@ import (
 	"os"
 )
 
-// SecurePathBackend 提供以 root dirfd 为锚的文件操作。
-// 所有方法的 rel 必须是【已经过 sanitizeVirtualPath】的相对路径，不含 ".." 段。
+// SecurePathBackend provides file operations anchored on a root descriptor.
+// Every rel argument must already have passed sanitizeVirtualPath and therefore
+// contain no ".." segment.
 type SecurePathBackend interface {
-	// OpenRoot 打开挂载点根目录，返回的句柄用于后续所有相对操作。
+	// OpenRoot opens a mount root; the handle serves all later relative ops.
 	OpenRoot(localRoot string) (RootHandle, error)
 }
 
-// RootHandle 是一个挂载点根目录的持有者。所有相对操作都被约束在其之下。
+// RootHandle holds one mount root. All relative operations stay beneath it.
 type RootHandle interface {
-	// ReadFile 读取 root 之下的相对路径。
+	// ReadFile reads a path relative to the root.
 	ReadFile(rel string) ([]byte, error)
-	// WriteFile 写入 root 之下的相对路径。
+	// WriteFile writes a path relative to the root.
 	WriteFile(rel string, data []byte, perm os.FileMode) error
-	// Stat 取 root 之下相对路径的元信息，不跟随最终分量的符号链接。
+	// Stat returns metadata without following a symlink in the final component.
 	Stat(rel string) (fs.FileInfo, error)
-	// ReadDir 列出 root 之下相对路径的目录项。
+	// ReadDir lists directory entries relative to the root.
 	ReadDir(rel string) ([]fs.DirEntry, error)
-	// Close 释放持有的 fd。
+	// Close releases the held descriptors.
 	Close() error
 }
 
-// newSecureBackend 返回当前平台的实现。
-// Linux 使用 openat2(RESOLVE_BENEATH)，是生产安全基线；
-// 其他平台使用 os.Root 的逐段受限解析，用于开发与单测。
+// newSecureBackend returns the implementation for the current platform.
+// On Linux this resolves through openat2(RESOLVE_BENEATH), the production
+// security baseline; elsewhere os.Root's constrained walk serves development
+// and unit tests.
 func newSecureBackend() SecurePathBackend {
 	return &osRootBackend{}
 }
 
-// osRootBackend 基于 Go 1.24+ 的 os.Root。
+// osRootBackend is built on os.Root (Go 1.24+).
 //
-// os.Root 的语义正是我们需要的：所有操作被限制在根目录之下，
-// 不会跟随逃逸出根的符号链接，且由 runtime 在 Linux 上使用 openat2 实现。
-// 这同时覆盖 S2（软链逃逸）与 S3（经 ".." 落到别的挂载点）。
+// os.Root has exactly the semantics required: every operation is confined below
+// the root and symlinks escaping it are not followed, implemented via openat2 on
+// Linux. That covers both symlink escape and traversal into another mount.
 type osRootBackend struct{}
 
 func (b *osRootBackend) OpenRoot(localRoot string) (RootHandle, error) {
@@ -60,7 +64,8 @@ type osRootHandle struct {
 	root *os.Root
 }
 
-// normalizeRel 把空相对路径映射为 "."，os.Root 用 "." 表示根本身。
+// normalizeRel maps the empty relative path to ".", which os.Root uses for the
+// root itself.
 func normalizeRel(rel string) string {
 	if rel == "" {
 		return "."

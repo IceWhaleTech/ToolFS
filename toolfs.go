@@ -26,15 +26,17 @@ type Mount struct {
 	LocalPath string
 	ReadOnly  bool
 
-	// rootOnce/root/rootErr 惰性持有该挂载点根目录的受约束句柄。
-	// 所有真实文件 IO 都从它出发，而不是从 resolvePath 返回的绝对路径字符串出发——
-	// 后者无法抵御检查与使用之间的软链替换（TOCTOU），见 securepath.go。
+	// rootOnce/root/rootErr lazily hold this mount's constrained root handle.
+	// Real file IO is issued through it rather than through the absolute path
+	// string resolvePath returns, which cannot withstand a symlink swap between
+	// check and use. See securepath.go.
 	rootOnce sync.Once
 	root     RootHandle
 	rootErr  error
 }
 
-// secureRoot 返回该挂载点的受约束根句柄；虚拟挂载（memory/rag/skill）没有真实根目录。
+// secureRoot returns this mount's constrained root handle. Virtual mounts
+// (memory, rag, skill) have no real root directory.
 func (m *Mount) secureRoot() (RootHandle, error) {
 	m.rootOnce.Do(func() {
 		m.root, m.rootErr = newSecureBackend().OpenRoot(m.LocalPath)
@@ -42,10 +44,12 @@ func (m *Mount) secureRoot() (RootHandle, error) {
 	return m.root, m.rootErr
 }
 
-// secureTarget 把 resolvePath 得到的绝对 localPath 换算成「根句柄 + 相对路径」。
+// secureTarget converts the absolute localPath from resolvePath into a root
+// handle plus a relative path.
 //
-// 这是 S2/S3 的修复点：此后所有真实 IO 都经由该句柄发起，被内核约束在挂载点之内，
-// 即使解析与使用之间有人把某一层换成指向外部的软链也无法逃逸。
+// This is where symlink escape and cross-mount traversal are shut down: from
+// here on, IO is issued through the handle and confined by the kernel, even if
+// a component is swapped for an outward-pointing symlink between resolve and use.
 func secureTarget(mount *Mount, localPath string) (RootHandle, string, error) {
 	root, err := mount.secureRoot()
 	if err != nil {
@@ -55,7 +59,8 @@ func secureTarget(mount *Mount, localPath string) (RootHandle, string, error) {
 	if err != nil {
 		return nil, "", ErrPathEscapesRoot
 	}
-	// localPath 由已净化的虚拟路径 Join 而来，正常不会出现 ".."；这里是纵深防御。
+	// localPath is joined from an already-sanitized virtual path, so ".." should
+	// not appear. This check is defence in depth.
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil, "", ErrPathEscapesRoot
 	}
@@ -117,26 +122,28 @@ type AuditLogger interface {
 }
 
 // StdoutAuditLogger logs audit entries to stdout as JSON
-// StdoutAuditLogger 把审计记录写到一个【构造时固定下来】的 writer。
+// StdoutAuditLogger writes audit records to a writer fixed at construction.
 //
-// 刻意不在 Log 里读取 os.Stdout 全局变量：InMemorySandbox 在捕获技能输出时
-// 会临时改写 os.Stdout，两者并发即产生 data race（S5）。审计器持有自己的 writer 后，
-// 无论谁改写全局都与它无关。
+// It deliberately does not read the os.Stdout global inside Log: InMemorySandbox
+// temporarily reassigns os.Stdout while capturing skill output, and the two
+// racing produced a data race. Holding its own writer makes the logger immune to
+// whoever reassigns the global.
 type StdoutAuditLogger struct {
 	w io.Writer
 }
 
-// NewStdoutAuditLogger 返回写往 os.Stdout 的审计器（在构造这一刻取值）。
+// NewStdoutAuditLogger returns a logger bound to os.Stdout as it is right now.
 func NewStdoutAuditLogger() *StdoutAuditLogger {
 	return &StdoutAuditLogger{w: os.Stdout}
 }
 
-// NewAuditLoggerTo 返回写往指定 writer 的审计器，便于测试与重定向。
+// NewAuditLoggerTo returns a logger bound to an explicit writer.
 func NewAuditLoggerTo(w io.Writer) *StdoutAuditLogger {
 	return &StdoutAuditLogger{w: w}
 }
 
-// writer 兼容零值构造的 &StdoutAuditLogger{}（既有代码里有这种用法）。
+// writer keeps the zero value &StdoutAuditLogger{} working, as existing code
+// constructs it that way.
 func (l *StdoutAuditLogger) writer() io.Writer {
 	if l.w != nil {
 		return l.w
@@ -197,15 +204,16 @@ func (s *Session) IsPathAllowed(path string) bool {
 		return true // No restrictions if no paths specified
 	}
 
-	// 含 ".." 段的路径一律拒绝：判定阶段若放行、执行阶段再由 filepath.Join 清理，
-	// 两个阶段就会作用在不同的路径值上（S1 的根因）。
+	// Reject any path containing a ".." segment. Allowing it here and letting
+	// filepath.Join clean it during execution is precisely what made the two
+	// stages act on different paths.
 	sanitized, err := sanitizeVirtualPath(path)
 	if err != nil {
 		return false
 	}
 
 	for _, allowed := range s.AllowedPaths {
-		// 授权前缀按【路径段】比对，否则 "/toolfs/data" 会命中 "/toolfs/database"（S6）。
+		// Compare by path segment, or "/toolfs/data" would match "/toolfs/database".
 		if pathHasPrefix(sanitized, normalizeVirtualPath(allowed)) {
 			return true
 		}
@@ -288,9 +296,11 @@ type SkillMount struct {
 
 // ToolFS represents the filesystem instance
 type ToolFS struct {
-	// mu 保护 mounts / skillMounts / sessions / snapshots / currentSnapshot（S4）。
-	// 刻意采用【细粒度且不嵌套】的加锁：临界区只包住 map 本身的读写，
-	// 不跨越 resolvePath 等会再次取锁的调用，以免 RWMutex 在有写者等待时读读死锁。
+	// mu guards mounts, skillMounts, sessions, snapshots and currentSnapshot.
+	// Locking is deliberately fine-grained and never nested: a critical section
+	// covers only the map access itself and never spans a call such as
+	// resolvePath that takes the lock again, since an RWMutex can deadlock
+	// reader-on-reader once a writer is queued.
 	mu sync.RWMutex
 
 	rootPath         string
@@ -530,7 +540,8 @@ func (fs *ToolFS) MountLocal(mountPoint string, localPath string, readOnly bool)
 func (fs *ToolFS) isVirtualPath(path string) (bool, string) {
 	path = normalizeVirtualPath(path)
 
-	// 分段匹配：避免 "/toolfs/memoryX" 被当成 "/toolfs/memory" 的子路径（S6）。
+	// Segment matching, so "/toolfs/memoryX" is not treated as living under
+	// "/toolfs/memory".
 	if pathHasPrefix(path, fs.memoryPath) {
 		return true, "memory"
 	}
@@ -551,7 +562,7 @@ func (fs *ToolFS) isSkillMount(path string) (*SkillMount, string) {
 
 	for mountPoint, skillMount := range fs.skillMounts {
 		mountPoint = normalizeVirtualPath(mountPoint)
-		// 分段匹配，理由同 isVirtualPath（S6）。
+		// Segment matching, same reasoning as isVirtualPath.
 		rel, ok := relativeUnder(path, mountPoint)
 		if ok {
 			if len(mountPoint) > len(bestMountPoint) {
@@ -742,8 +753,8 @@ func (fs *ToolFS) executeSkillMount(skillMount *SkillMount, path, relPath, opera
 // resolvePath resolves a ToolFS path to a local filesystem path
 // Optimized: uses result caching to avoid repeated resolution
 func (fs *ToolFS) resolvePath(path string) (string, *Mount, error) {
-	// 入口即净化：拒绝 NUL 与任何 ".." 段。
-	// 这样判定与执行落在同一个路径值上，S1 那类「判定放行、Join 清理后逃逸」在结构上不再可能。
+	// Sanitize at the entry point, rejecting NUL and any ".." segment, so the
+	// authorization decision and the execution act on the same path value.
 	path, err := sanitizeVirtualPath(path)
 	if err != nil {
 		return "", nil, err
@@ -788,7 +799,7 @@ func (fs *ToolFS) resolvePath(path string) (string, *Mount, error) {
 
 		fs.mu.RLock()
 		for mountPoint, m := range fs.mounts {
-			// 按路径段匹配，避免 "/toolfs/database" 命中挂载点 "/toolfs/data"（S6）。
+			// Match by path segment so "/toolfs/database" misses mount "/toolfs/data".
 			relPath, ok := relativeUnder(path, mountPoint)
 			if !ok || len(mountPoint) <= len(bestMountPoint) {
 				continue
@@ -878,7 +889,8 @@ func (fs *ToolFS) ReadFileWithSession(path string, session *Session) ([]byte, er
 	} else if mount.LocalPath == "__VIRTUAL_RAG__" {
 		data, err = fs.readRAG(path)
 	} else {
-		// 经受约束根句柄读取，抵御软链逃逸与挂载点穿越（S2/S3）。
+		// Read through the constrained handle, defeating symlink escape and
+		// cross-mount traversal.
 		if root, rel, sErr := secureTarget(mount, localPath); sErr != nil {
 			err = sErr
 		} else {
@@ -1060,7 +1072,7 @@ func (fs *ToolFS) WriteFileWithSession(path string, data []byte, session *Sessio
 			}
 			return err
 		}
-		// 同读路径：写入也必须从受约束根句柄发起（S2/S3）。
+		// As with reads, writes must also originate from the constrained handle.
 		if root, rel, sErr := secureTarget(mount, localPath); sErr != nil {
 			err = sErr
 		} else {
@@ -1218,7 +1230,7 @@ func (fs *ToolFS) ListDirWithSession(path string, session *Session) ([]string, e
 		// RAG is read-only and doesn't support listing
 		entries = []string{"query"}
 	} else {
-		// 列目录同样经受约束根句柄（S2/S3）。
+		// Directory listing goes through the constrained handle too.
 		root, rel, readErr := secureTarget(mount, localPath)
 		var dirEntries []os.DirEntry
 		if readErr == nil {
@@ -1308,7 +1320,7 @@ func (fs *ToolFS) StatWithSession(path string, session *Session) (*FileInfo, err
 		}
 	}
 
-	// Stat 同样经受约束根句柄，且不跟随最终分量的软链（S2）。
+	// Stat likewise, and without following a symlink in the final component.
 	root, rel, err := secureTarget(mount, localPath)
 	var info os.FileInfo
 	if err == nil {

@@ -1,15 +1,20 @@
 package toolfs
 
-// 路径安全基元（设计稿 §4.2 / §11.0 的 S1、S6）。
+// Path security primitives.
 //
-// 分工务必清楚：
-//   - normalizeVirtualPath 只做【字符】规范化——反斜杠转斜杠、合并重复斜杠、
-//     去 "./" 前缀与尾斜杠。它【不】清理 ".."，且被多处既有代码依赖，故保持原样。
-//   - sanitizeVirtualPath 在其之上施加【语义】校验，拒绝一切可能改变路径归属的成分。
+// The division of labour matters:
+//   - normalizeVirtualPath performs *lexical* normalization only — backslash to
+//     slash, collapsing repeated slashes, dropping a "./" prefix and a trailing
+//     slash. It does not clean "..", and several existing call sites depend on
+//     that, so it is left alone.
+//   - sanitizeVirtualPath adds *semantic* validation on top, rejecting anything
+//     that could change which mount a path belongs to.
 //
-// S1 的根因正是二者被混用：判定走 normalizeVirtualPath（保留 ".."），
-// 执行走 filepath.Join（会 clean 掉 ".."），同一个输入产生两个不同的路径值。
-// 在入口处直接拒绝 ".." 之后，这个偏差在结构上不再可能出现。
+// Mixing the two is exactly what allowed path traversal: the authorization check
+// went through normalizeVirtualPath (which preserves ".."), while execution went
+// through filepath.Join (which cleans it), so one input yielded two different
+// paths. Rejecting ".." at the entry point makes that divergence structurally
+// impossible rather than patched over.
 
 import (
 	"errors"
@@ -17,21 +22,21 @@ import (
 )
 
 var (
-	// ErrInvalidPath 表示路径含有非法字符或为空。
+	// ErrInvalidPath reports an empty path or one containing illegal bytes.
 	ErrInvalidPath = errors.New("toolfs: invalid path")
-	// ErrPathTraversal 表示路径含有 ".." 段，可能逃逸出挂载点。
+	// ErrPathTraversal reports a ".." segment that could escape the mount.
 	ErrPathTraversal = errors.New("toolfs: path traversal rejected")
-	// ErrPathEscapesRoot 表示解析后的真实路径落在了挂载点之外。
+	// ErrPathEscapesRoot reports a resolved path landing outside its mount.
 	ErrPathEscapesRoot = errors.New("toolfs: path escapes mount root")
-	// ErrReadOnlyMount 表示对只读挂载点的写入尝试。
+	// ErrReadOnlyMount reports a write attempt against a read-only mount.
 	ErrReadOnlyMount = errors.New("toolfs: read-only mount")
 )
 
-// sanitizeVirtualPath 规范化并校验一个虚拟路径。
+// sanitizeVirtualPath normalizes and validates a virtual path.
 //
-// 拒绝：空路径、含 NUL 字节、任何 ".." 路径段。
-// 返回规范化后的路径，调用方应当【只】使用返回值继续处理，
-// 以保证判定与执行落在同一个路径值上。
+// It rejects the empty path, paths containing a NUL byte, and any ".." segment.
+// Callers must use only the returned value from then on, so that the
+// authorization decision and the execution act on the same path.
 func sanitizeVirtualPath(path string) (string, error) {
 	if path == "" {
 		return "", ErrInvalidPath
@@ -45,7 +50,8 @@ func sanitizeVirtualPath(path string) (string, error) {
 		return "", ErrInvalidPath
 	}
 
-	// 按段检查，不能用 strings.Contains(path, "..")——那会误伤 "..foo" 这类合法名字。
+	// Check per segment. strings.Contains(path, "..") would wrongly reject
+	// legitimate names such as "..foo".
 	for _, seg := range strings.Split(normalized, "/") {
 		if seg == ".." {
 			return "", ErrPathTraversal
@@ -55,9 +61,10 @@ func sanitizeVirtualPath(path string) (string, error) {
 	return normalized, nil
 }
 
-// pathHasPrefix 按【路径段】判断 path 是否位于 prefix 之下（或恰好等于它）。
+// pathHasPrefix reports whether path sits under prefix, comparing by path
+// segment rather than by raw string prefix.
 //
-// 这替代了裸 strings.HasPrefix：后者会让 "/toolfs/database" 命中 "/toolfs/data"（S6）。
+// The raw form let "/toolfs/database" match the mount point "/toolfs/data".
 func pathHasPrefix(path, prefix string) bool {
 	if prefix == "" {
 		return false
@@ -66,10 +73,10 @@ func pathHasPrefix(path, prefix string) bool {
 		return true
 	}
 
-	// 归一尾斜杠，避免 "/a/" 与 "/a" 被当成不同前缀。
+	// Fold the trailing slash so "/a/" and "/a" are the same prefix.
 	trimmed := strings.TrimSuffix(prefix, "/")
 	if trimmed == "" {
-		// prefix 是根 "/"，任何绝对路径都在其下。
+		// prefix is the root "/", which contains every absolute path.
 		return strings.HasPrefix(path, "/")
 	}
 	if path == trimmed {
@@ -79,13 +86,14 @@ func pathHasPrefix(path, prefix string) bool {
 		return false
 	}
 
-	// 边界必须是分隔符，否则 "/toolfs/database" 会命中 "/toolfs/data"（S6）。
-	// 除 "/" 外，"?" 也算边界：虚拟后端（rag/memory）把查询串直接编码在路径里，
-	// 形如 "/toolfs/rag?text=x"，readRAG 正是按 "?" 切分的。
+	// The boundary must be a separator. Besides "/", "?" also counts: the
+	// virtual backends encode a query string directly in the path, as in
+	// "/toolfs/rag?text=x", and readRAG splits on "?" for exactly that reason.
 	//
-	// 放宽到 "?" 不会带来逃逸风险：字符串匹配只决定【选中哪个挂载点】，
-	// 真正的边界由 RootHandle（os.Root / openat2 RESOLVE_BENEATH）在内核层守住——
-	// 即使某个真实文件名里含 "?"，读写也仍被约束在该挂载点之内。
+	// Accepting "?" introduces no escape risk. String matching only selects
+	// *which mount* applies; the real boundary is enforced by RootHandle
+	// (os.Root, backed by openat2 RESOLVE_BENEATH on Linux), so even a real
+	// filename containing "?" stays confined to its mount.
 	switch path[len(trimmed)] {
 	case '/', '?':
 		return true
@@ -94,8 +102,8 @@ func pathHasPrefix(path, prefix string) bool {
 	}
 }
 
-// relativeUnder 在 path 位于 prefix 之下时返回相对部分（不含前导斜杠）。
-// path == prefix 时返回空串。第二个返回值表示是否命中。
+// relativeUnder returns the portion of path below prefix, without a leading
+// slash, plus whether path is under prefix at all. An exact match yields "".
 func relativeUnder(path, prefix string) (string, bool) {
 	if !pathHasPrefix(path, prefix) {
 		return "", false
@@ -105,6 +113,7 @@ func relativeUnder(path, prefix string) (string, bool) {
 		return "", true
 	}
 	rel := strings.TrimPrefix(path, trimmed)
-	// 只剥掉 "/"；"?" 属于相对部分本身（虚拟后端要拿它解析查询串）。
+	// Strip only "/". A "?" belongs to the relative part, since the virtual
+	// backends need it to parse their query string.
 	return strings.TrimPrefix(rel, "/"), true
 }
