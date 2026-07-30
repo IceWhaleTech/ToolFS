@@ -24,6 +24,10 @@ type SandboxConfig struct {
 }
 
 // DefaultSandboxConfig returns a safe default sandbox configuration
+// stdioHijackMu 串行化对 os.Stdout/os.Stderr 的临时改写。
+// 这些是进程全局变量，并发劫持会互相覆盖保存的原值，导致永久性错乱。
+var stdioHijackMu sync.Mutex
+
 func DefaultSandboxConfig() *SandboxConfig {
 	return &SandboxConfig{
 		CPUTimeout:    30 * time.Second,
@@ -106,6 +110,15 @@ func (s *InMemorySandbox) Execute(executor SkillExecutor, input []byte, config *
 		defer cancel()
 	}
 
+	// 捕获技能输出需要临时改写 os.Stdout/os.Stderr —— 这是【进程全局】状态。
+	// SkillExecutor.Execute(input []byte) 没有 writer 参数，因此无法避免劫持；
+	// 但可以做到两件事：(a) 全程串行，避免并发劫持互相覆盖保存的原值；
+	// (b) 在本函数返回前同步还原，而不是在异步 goroutine 里还原（S5）。
+	if config.CaptureStdout || config.CaptureStderr {
+		stdioHijackMu.Lock()
+		defer stdioHijackMu.Unlock()
+	}
+
 	// Capture stdout/stderr
 	var stdoutBuf, stderrBuf bytes.Buffer
 	var originalStdout, originalStderr *os.File
@@ -148,6 +161,17 @@ func (s *InMemorySandbox) Execute(executor SkillExecutor, input []byte, config *
 		}()
 	}
 
+	// 同步还原：defer 在本函数返回时执行，此时仍持有 stdioHijackMu，
+	// 因此还原与下一次劫持之间不会交错。
+	defer func() {
+		if originalStdout != nil {
+			os.Stdout = originalStdout
+		}
+		if originalStderr != nil {
+			os.Stderr = originalStderr
+		}
+	}()
+
 	// Track execution start time and memory
 	startTime := time.Now()
 	var memoryUsed int64
@@ -167,14 +191,6 @@ func (s *InMemorySandbox) Execute(executor SkillExecutor, input []byte, config *
 		output, err := restrictedSkill.Execute(input)
 
 		cpuTime := time.Since(startTime)
-
-		// Restore original stdout/stderr
-		if originalStdout != nil {
-			os.Stdout = originalStdout
-		}
-		if originalStderr != nil {
-			os.Stderr = originalStderr
-		}
 
 		// Close write end to trigger copy goroutine completion
 		// Note: Write end needs to be closed after use, but since it's in defer, we need to explicitly close it here

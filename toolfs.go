@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +25,41 @@ type FileInfo struct {
 type Mount struct {
 	LocalPath string
 	ReadOnly  bool
+
+	// rootOnce/root/rootErr 惰性持有该挂载点根目录的受约束句柄。
+	// 所有真实文件 IO 都从它出发，而不是从 resolvePath 返回的绝对路径字符串出发——
+	// 后者无法抵御检查与使用之间的软链替换（TOCTOU），见 securepath.go。
+	rootOnce sync.Once
+	root     RootHandle
+	rootErr  error
+}
+
+// secureRoot 返回该挂载点的受约束根句柄；虚拟挂载（memory/rag/skill）没有真实根目录。
+func (m *Mount) secureRoot() (RootHandle, error) {
+	m.rootOnce.Do(func() {
+		m.root, m.rootErr = newSecureBackend().OpenRoot(m.LocalPath)
+	})
+	return m.root, m.rootErr
+}
+
+// secureTarget 把 resolvePath 得到的绝对 localPath 换算成「根句柄 + 相对路径」。
+//
+// 这是 S2/S3 的修复点：此后所有真实 IO 都经由该句柄发起，被内核约束在挂载点之内，
+// 即使解析与使用之间有人把某一层换成指向外部的软链也无法逃逸。
+func secureTarget(mount *Mount, localPath string) (RootHandle, string, error) {
+	root, err := mount.secureRoot()
+	if err != nil {
+		return nil, "", err
+	}
+	rel, err := filepath.Rel(mount.LocalPath, localPath)
+	if err != nil {
+		return nil, "", ErrPathEscapesRoot
+	}
+	// localPath 由已净化的虚拟路径 Join 而来，正常不会出现 ".."；这里是纵深防御。
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, "", ErrPathEscapesRoot
+	}
+	return root, rel, nil
 }
 
 // MemoryEntry represents a memory entry with content and metadata
@@ -81,7 +117,32 @@ type AuditLogger interface {
 }
 
 // StdoutAuditLogger logs audit entries to stdout as JSON
-type StdoutAuditLogger struct{}
+// StdoutAuditLogger 把审计记录写到一个【构造时固定下来】的 writer。
+//
+// 刻意不在 Log 里读取 os.Stdout 全局变量：InMemorySandbox 在捕获技能输出时
+// 会临时改写 os.Stdout，两者并发即产生 data race（S5）。审计器持有自己的 writer 后，
+// 无论谁改写全局都与它无关。
+type StdoutAuditLogger struct {
+	w io.Writer
+}
+
+// NewStdoutAuditLogger 返回写往 os.Stdout 的审计器（在构造这一刻取值）。
+func NewStdoutAuditLogger() *StdoutAuditLogger {
+	return &StdoutAuditLogger{w: os.Stdout}
+}
+
+// NewAuditLoggerTo 返回写往指定 writer 的审计器，便于测试与重定向。
+func NewAuditLoggerTo(w io.Writer) *StdoutAuditLogger {
+	return &StdoutAuditLogger{w: w}
+}
+
+// writer 兼容零值构造的 &StdoutAuditLogger{}（既有代码里有这种用法）。
+func (l *StdoutAuditLogger) writer() io.Writer {
+	if l.w != nil {
+		return l.w
+	}
+	return os.Stdout
+}
 
 // Log writes an audit entry to stdout as JSON
 func (l *StdoutAuditLogger) Log(entry AuditLogEntry) error {
@@ -89,8 +150,8 @@ func (l *StdoutAuditLogger) Log(entry AuditLogEntry) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(data))
-	return nil
+	_, err = fmt.Fprintln(l.writer(), string(data))
+	return err
 }
 
 // Session represents an isolated LLM session with access restrictions
@@ -136,10 +197,16 @@ func (s *Session) IsPathAllowed(path string) bool {
 		return true // No restrictions if no paths specified
 	}
 
-	path = normalizeVirtualPath(path)
+	// 含 ".." 段的路径一律拒绝：判定阶段若放行、执行阶段再由 filepath.Join 清理，
+	// 两个阶段就会作用在不同的路径值上（S1 的根因）。
+	sanitized, err := sanitizeVirtualPath(path)
+	if err != nil {
+		return false
+	}
+
 	for _, allowed := range s.AllowedPaths {
-		allowed = normalizeVirtualPath(allowed)
-		if strings.HasPrefix(path, allowed) {
+		// 授权前缀按【路径段】比对，否则 "/toolfs/data" 会命中 "/toolfs/database"（S6）。
+		if pathHasPrefix(sanitized, normalizeVirtualPath(allowed)) {
 			return true
 		}
 	}
@@ -221,6 +288,11 @@ type SkillMount struct {
 
 // ToolFS represents the filesystem instance
 type ToolFS struct {
+	// mu 保护 mounts / skillMounts / sessions / snapshots / currentSnapshot（S4）。
+	// 刻意采用【细粒度且不嵌套】的加锁：临界区只包住 map 本身的读写，
+	// 不跨越 resolvePath 等会再次取锁的调用，以免 RWMutex 在有写者等待时读读死锁。
+	mu sync.RWMutex
+
 	rootPath         string
 	mounts           map[string]*Mount
 	skillMounts      map[string]*SkillMount // Path -> SkillMount (formerly SkillMount)
@@ -304,6 +376,8 @@ func (fs *ToolFS) SetSandboxBackend(backend SandboxBackend) {
 
 // NewSession creates a new session and registers it with the ToolFS instance
 func (fs *ToolFS) NewSession(sessionID string, allowedPaths []string) (*Session, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
 	if _, exists := fs.sessions[sessionID]; exists {
 		return nil, errors.New("session already exists")
 	}
@@ -315,7 +389,9 @@ func (fs *ToolFS) NewSession(sessionID string, allowedPaths []string) (*Session,
 
 // GetSession retrieves a session by ID
 func (fs *ToolFS) GetSession(sessionID string) (*Session, error) {
+	fs.mu.RLock()
 	session, exists := fs.sessions[sessionID]
+	fs.mu.RUnlock()
 	if !exists {
 		return nil, errors.New("session not found")
 	}
@@ -324,7 +400,9 @@ func (fs *ToolFS) GetSession(sessionID string) (*Session, error) {
 
 // DeleteSession removes a session
 func (fs *ToolFS) DeleteSession(sessionID string) {
+	fs.mu.Lock()
 	delete(fs.sessions, sessionID)
+	fs.mu.Unlock()
 }
 
 // SetMemoryStore sets the memory store for the ToolFS instance
@@ -427,10 +505,12 @@ func (fs *ToolFS) MountLocal(mountPoint string, localPath string, readOnly bool)
 		return errors.New("local path must be a directory")
 	}
 
+	fs.mu.Lock()
 	fs.mounts[mountPoint] = &Mount{
 		LocalPath: localPath,
 		ReadOnly:  readOnly,
 	}
+	fs.mu.Unlock()
 
 	// Invalidate path resolution cache since mounts changed
 	fs.pathResolveCache.Range(func(key, value interface{}) bool {
@@ -450,10 +530,11 @@ func (fs *ToolFS) MountLocal(mountPoint string, localPath string, readOnly bool)
 func (fs *ToolFS) isVirtualPath(path string) (bool, string) {
 	path = normalizeVirtualPath(path)
 
-	if strings.HasPrefix(path, fs.memoryPath) {
+	// 分段匹配：避免 "/toolfs/memoryX" 被当成 "/toolfs/memory" 的子路径（S6）。
+	if pathHasPrefix(path, fs.memoryPath) {
 		return true, "memory"
 	}
-	if strings.HasPrefix(path, fs.ragPath) {
+	if pathHasPrefix(path, fs.ragPath) {
 		return true, "rag"
 	}
 	return false, ""
@@ -470,16 +551,16 @@ func (fs *ToolFS) isSkillMount(path string) (*SkillMount, string) {
 
 	for mountPoint, skillMount := range fs.skillMounts {
 		mountPoint = normalizeVirtualPath(mountPoint)
-		if strings.HasPrefix(path, mountPoint) {
+		// 分段匹配，理由同 isVirtualPath（S6）。
+		rel, ok := relativeUnder(path, mountPoint)
+		if ok {
 			if len(mountPoint) > len(bestMountPoint) {
 				bestMountPoint = mountPoint
 				bestMount = skillMount
-				relPath = strings.TrimPrefix(path, mountPoint)
-				relPath = strings.TrimPrefix(relPath, "/")
-				if relPath == "" {
+				if rel == "" {
 					relPath = "/"
 				} else {
-					relPath = "/" + relPath
+					relPath = "/" + rel
 				}
 			}
 		}
@@ -661,8 +742,12 @@ func (fs *ToolFS) executeSkillMount(skillMount *SkillMount, path, relPath, opera
 // resolvePath resolves a ToolFS path to a local filesystem path
 // Optimized: uses result caching to avoid repeated resolution
 func (fs *ToolFS) resolvePath(path string) (string, *Mount, error) {
-	// Normalize the virtual path to use forward slashes
-	path = normalizeVirtualPath(path)
+	// 入口即净化：拒绝 NUL 与任何 ".." 段。
+	// 这样判定与执行落在同一个路径值上，S1 那类「判定放行、Join 清理后逃逸」在结构上不再可能。
+	path, err := sanitizeVirtualPath(path)
+	if err != nil {
+		return "", nil, err
+	}
 
 	// Try to get from cache first
 	// Note: Cache is invalidated when mounts change (MountLocal/UnmountSkillExecutor)
@@ -681,7 +766,6 @@ func (fs *ToolFS) resolvePath(path string) (string, *Mount, error) {
 	// Not in cache, resolve the path
 	var localPath string
 	var mount *Mount
-	var err error
 
 	// Check if this is a skill mount first (highest priority)
 	if skillMount, relPath := fs.isSkillMount(path); skillMount != nil {
@@ -702,27 +786,25 @@ func (fs *ToolFS) resolvePath(path string) (string, *Mount, error) {
 		var bestMountPoint string
 		var bestLocalPath string
 
+		fs.mu.RLock()
 		for mountPoint, m := range fs.mounts {
-			if strings.HasPrefix(path, mountPoint) {
-				if len(mountPoint) > len(bestMountPoint) {
-					bestMountPoint = mountPoint
-					bestMount = m
-					// Calculate the relative path within the mount
-					relPath := strings.TrimPrefix(path, mountPoint)
-					relPath = strings.TrimPrefix(relPath, "/")
-					relPath = strings.TrimPrefix(relPath, "\\")
-					if relPath == "" {
-						bestLocalPath = m.LocalPath
-					} else {
-						bestLocalPath = filepath.Join(m.LocalPath, relPath)
-					}
-				}
+			// 按路径段匹配，避免 "/toolfs/database" 命中挂载点 "/toolfs/data"（S6）。
+			relPath, ok := relativeUnder(path, mountPoint)
+			if !ok || len(mountPoint) <= len(bestMountPoint) {
+				continue
+			}
+			bestMountPoint = mountPoint
+			bestMount = m
+			if relPath == "" {
+				bestLocalPath = m.LocalPath
+			} else {
+				bestLocalPath = filepath.Join(m.LocalPath, relPath)
 			}
 		}
+		fs.mu.RUnlock()
 
 		if bestMount == nil {
-			err = errors.New("path not found in any mount")
-			return "", nil, err
+			return "", nil, errors.New("path not found in any mount")
 		}
 
 		localPath = bestLocalPath
@@ -770,6 +852,7 @@ func (fs *ToolFS) ReadFileWithSession(path string, session *Session) ([]byte, er
 		// Find the skill mount by matching path prefix
 		var skillMount *SkillMount
 		var mountPoint string
+		fs.mu.RLock()
 		for mp, pm := range fs.skillMounts {
 			if pm.SkillName == skillName && strings.HasPrefix(path, mp) {
 				if len(mp) > len(mountPoint) {
@@ -778,6 +861,7 @@ func (fs *ToolFS) ReadFileWithSession(path string, session *Session) ([]byte, er
 				}
 			}
 		}
+		fs.mu.RUnlock()
 
 		if skillMount != nil {
 			// Execute skill with error recovery
@@ -794,7 +878,12 @@ func (fs *ToolFS) ReadFileWithSession(path string, session *Session) ([]byte, er
 	} else if mount.LocalPath == "__VIRTUAL_RAG__" {
 		data, err = fs.readRAG(path)
 	} else {
-		data, err = os.ReadFile(localPath)
+		// 经受约束根句柄读取，抵御软链逃逸与挂载点穿越（S2/S3）。
+		if root, rel, sErr := secureTarget(mount, localPath); sErr != nil {
+			err = sErr
+		} else {
+			data, err = root.ReadFile(rel)
+		}
 	}
 
 	// Log audit entry
@@ -921,6 +1010,7 @@ func (fs *ToolFS) WriteFileWithSession(path string, data []byte, session *Sessio
 		skillName := strings.TrimPrefix(mount.LocalPath, "__SKILL_MOUNT__:")
 		var skillMount *SkillMount
 		var mountPoint string
+		fs.mu.RLock()
 		for mp, pm := range fs.skillMounts {
 			if pm.SkillName == skillName && strings.HasPrefix(path, mp) {
 				if len(mp) > len(mountPoint) {
@@ -929,6 +1019,7 @@ func (fs *ToolFS) WriteFileWithSession(path string, data []byte, session *Sessio
 				}
 			}
 		}
+		fs.mu.RUnlock()
 
 		if skillMount != nil {
 			if skillMount.ReadOnly {
@@ -969,7 +1060,12 @@ func (fs *ToolFS) WriteFileWithSession(path string, data []byte, session *Sessio
 			}
 			return err
 		}
-		err = os.WriteFile(localPath, data, 0o644)
+		// 同读路径：写入也必须从受约束根句柄发起（S2/S3）。
+		if root, rel, sErr := secureTarget(mount, localPath); sErr != nil {
+			err = sErr
+		} else {
+			err = root.WriteFile(rel, data, 0o644)
+		}
 	}
 
 	// Log audit entry
@@ -1063,6 +1159,7 @@ func (fs *ToolFS) ListDirWithSession(path string, session *Session) ([]string, e
 		skillName := strings.TrimPrefix(mount.LocalPath, "__SKILL_MOUNT__:")
 		var skillMount *SkillMount
 		var mountPoint string
+		fs.mu.RLock()
 		for mp, pm := range fs.skillMounts {
 			if pm.SkillName == skillName && strings.HasPrefix(path, mp) {
 				if len(mp) > len(mountPoint) {
@@ -1071,6 +1168,7 @@ func (fs *ToolFS) ListDirWithSession(path string, session *Session) ([]string, e
 				}
 			}
 		}
+		fs.mu.RUnlock()
 
 		if skillMount != nil {
 			// Execute skill for list_dir operation
@@ -1120,7 +1218,12 @@ func (fs *ToolFS) ListDirWithSession(path string, session *Session) ([]string, e
 		// RAG is read-only and doesn't support listing
 		entries = []string{"query"}
 	} else {
-		dirEntries, readErr := os.ReadDir(localPath)
+		// 列目录同样经受约束根句柄（S2/S3）。
+		root, rel, readErr := secureTarget(mount, localPath)
+		var dirEntries []os.DirEntry
+		if readErr == nil {
+			dirEntries, readErr = root.ReadDir(rel)
+		}
 		if readErr != nil {
 			err = readErr
 		} else {
@@ -1205,7 +1308,12 @@ func (fs *ToolFS) StatWithSession(path string, session *Session) (*FileInfo, err
 		}
 	}
 
-	info, err := os.Stat(localPath)
+	// Stat 同样经受约束根句柄，且不跟随最终分量的软链（S2）。
+	root, rel, err := secureTarget(mount, localPath)
+	var info os.FileInfo
+	if err == nil {
+		info, err = root.Stat(rel)
+	}
 	if err != nil {
 		if session != nil {
 			session.logAudit("Stat", path, false, err, 0, 0)
