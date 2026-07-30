@@ -33,6 +33,17 @@ type RootHandle interface {
 	Stat(rel string) (fs.FileInfo, error)
 	// ReadDir lists directory entries relative to the root.
 	ReadDir(rel string) ([]fs.DirEntry, error)
+
+	// Mutations. All of these stay confined to the root, which is what lets
+	// the protection chain move a file into its state area without ever
+	// touching an absolute path — no TOCTOU window, and no chance of the
+	// rename crossing a filesystem boundary.
+	Mkdir(rel string, perm os.FileMode) error
+	MkdirAll(rel string, perm os.FileMode) error
+	Remove(rel string) error
+	Rename(oldRel, newRel string) error
+	Create(rel string, perm os.FileMode) error
+
 	// Close releases the held descriptors.
 	Close() error
 }
@@ -105,6 +116,30 @@ func (h *osRootHandle) ReadDir(rel string) ([]fs.DirEntry, error) {
 	}
 	defer f.Close()
 	return f.ReadDir(-1)
+}
+
+func (h *osRootHandle) Mkdir(rel string, perm os.FileMode) error {
+	return h.root.Mkdir(normalizeRel(rel), perm)
+}
+
+func (h *osRootHandle) MkdirAll(rel string, perm os.FileMode) error {
+	return h.root.MkdirAll(normalizeRel(rel), perm)
+}
+
+func (h *osRootHandle) Remove(rel string) error {
+	return h.root.Remove(normalizeRel(rel))
+}
+
+func (h *osRootHandle) Rename(oldRel, newRel string) error {
+	return h.root.Rename(normalizeRel(oldRel), normalizeRel(newRel))
+}
+
+func (h *osRootHandle) Create(rel string, perm os.FileMode) error {
+	f, err := h.root.OpenFile(normalizeRel(rel), os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 func (h *osRootHandle) Close() error {

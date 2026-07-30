@@ -38,6 +38,10 @@ type NamespaceEntry struct {
 	// entry is issued through it, so the kernel enforces containment even if
 	// a component of the path is swapped for a symlink mid-flight.
 	root RootHandle
+	// protection is this grant's trash and version store. It lives under the
+	// grant root and is reached through the same handle, which is what keeps
+	// trash renames free of both TOCTOU and EXDEV.
+	protection *boundProtection
 }
 
 // InstanceView is an immutable namespace snapshot for one mounted user.
@@ -49,6 +53,9 @@ type InstanceView struct {
 	// Generation mirrors the AccessSnapshot generation, so a permission
 	// decision cache can be invalidated by comparing one integer.
 	Generation uint64
+
+	// Policy governs trash and version behaviour for this instance.
+	Policy ProtectionPolicy
 
 	// entries is keyed by VirtualName.
 	entries map[string]*NamespaceEntry
@@ -79,6 +86,7 @@ func BuildInstanceView(identity *ZimaIdentity, access *AccessSnapshot, caps Agen
 		Access:     access,
 		Caps:       caps,
 		Generation: access.Generation,
+		Policy:     DefaultProtectionPolicy(),
 		entries:    make(map[string]*NamespaceEntry, len(access.Grants)),
 	}
 
@@ -265,6 +273,19 @@ func (v *InstanceView) openRoots() error {
 			return fmt.Errorf("toolfs: cannot open grant root %q: %w", entry.HostPath, err)
 		}
 		entry.root = root
+
+		// Read-only grants get no protection area: nothing can be deleted or
+		// overwritten through them, so there is nothing to preserve, and
+		// creating state directories under a read-only grant would be the only
+		// write ToolFS ever made there.
+		if !entry.ReadOnly {
+			protection, err := newBoundProtection(root, v.Policy)
+			if err != nil {
+				v.closeRoots()
+				return fmt.Errorf("toolfs: cannot prepare protection for %q: %w", entry.HostPath, err)
+			}
+			entry.protection = protection
+		}
 	}
 	return nil
 }

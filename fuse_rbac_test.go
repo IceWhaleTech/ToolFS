@@ -105,23 +105,33 @@ func TestMount_GrantedFileIsReadable(t *testing.T) {
 	}
 }
 
-// 挂载点在写保护链就绪前保持只读——在恢复能力存在之前允许覆盖写，
-// 恰恰就是本项目要消除的误删风险。
-func TestMount_IsReadOnlyUntilProtectionChainLands(t *testing.T) {
+// 写入受保护链约束：内容真正写入，且覆盖前的内容被留存。
+// （本用例此前断言「挂载点只读」——那条限制随保护链落地已被移除。）
+func TestMount_WritesAreProtected(t *testing.T) {
 	aliceMnt, _, cleanup := mountTwoUsers(t)
 	defer cleanup()
 
 	target := filepath.Join(aliceMnt, "Documents", "file.txt")
-	if err := os.WriteFile(target, []byte("OVERWRITTEN"), 0o644); err == nil {
-		t.Error("覆盖写意外成功——保护链尚未落地时挂载点必须只读")
+	if err := os.WriteFile(target, []byte("OVERWRITTEN"), 0o644); err != nil {
+		t.Fatalf("覆盖写: %v", err)
 	}
 
 	data, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("回读: %v", err)
 	}
-	if string(data) != "Documents" {
-		t.Errorf("文件内容被改成了 %q", string(data))
+	if string(data) != "OVERWRITTEN" {
+		t.Errorf("写入未生效，读到 %q", string(data))
+	}
+}
+
+// 默认不授予删除。
+func TestMount_DeleteWithheldByDefault(t *testing.T) {
+	aliceMnt, _, cleanup := mountTwoUsers(t)
+	defer cleanup()
+
+	if err := os.Remove(filepath.Join(aliceMnt, "Documents", "file.txt")); err == nil {
+		t.Error("默认配置下删除成功了")
 	}
 }
 

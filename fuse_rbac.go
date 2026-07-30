@@ -197,6 +197,11 @@ func (d *instanceDir) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errn
 	entries := make([]fuse.DirEntry, 0, len(items))
 	for _, item := range items {
 		childRel := joinRel(d.rel, item.Name())
+		// The protection area is not part of the namespace: exposing it would
+		// let an agent read content that was deleted precisely to protect it.
+		if isReservedRel(childRel) {
+			continue
+		}
 		// Hide anything the current grants do not cover, so a nested
 		// read-only or denied subtree is not even enumerated.
 		if !d.view.Allows(d.entry, childRel, OpRead) {
@@ -213,6 +218,9 @@ func (d *instanceDir) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errn
 
 func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofs.Inode, syscall.Errno) {
 	childRel := joinRel(d.rel, name)
+	if isReservedRel(childRel) {
+		return nil, syscall.ENOENT
+	}
 	if !d.view.Allows(d.entry, childRel, OpRead) {
 		return nil, syscall.ENOENT
 	}
@@ -281,17 +289,16 @@ func (f *instanceFile) Open(ctx context.Context, flags uint32) (gofs.FileHandle,
 		return nil, 0, syscall.ENOENT
 	}
 	if wantsWrite {
-		if f.entry.ReadOnly {
+		if f.entry.ReadOnly || f.entry.protection == nil {
 			return nil, 0, syscall.EROFS
 		}
 		if !f.view.Allows(f.entry, f.rel, OpModify) {
-			return nil, 0, syscall.EROFS
+			return nil, 0, syscall.EACCES
 		}
-		// Write support lands with the protection chain (trash and versions).
-		// Until then the mount is read-only rather than unprotected: allowing
-		// overwrite before the recovery path exists would be exactly the
-		// accidental-deletion risk this project is meant to remove.
-		return nil, 0, syscall.EROFS
+		// Writes go through the protection chain, which preserves the previous
+		// content before the first byte is accepted.
+		return &instanceWriteHandle{view: f.view, entry: f.entry, rel: f.rel},
+			fuse.FOPEN_DIRECT_IO, 0
 	}
 
 	data, err := f.entry.root.ReadFile(f.rel)
