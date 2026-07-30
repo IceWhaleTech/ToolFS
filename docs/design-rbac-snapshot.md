@@ -2088,3 +2088,85 @@ codex app-server --listen unix:///sock/app.sock
 **agent web 服务在 `0.0.0.0:8787` 无鉴权暴露。** 实测无任何凭据即可 `GET /api/sessions` 返回 200 与会话数据。同网段任何人都能打开 agent、创建会话、驱使其读写 `/DATA`——而 agent 当前对数据有完整访问权。
 
 ToolFS 落地后可收窄「agent 能碰哪些目录」，但**无法阻止未授权者驱使 agent**——那需要 agent 自身的鉴权。建议优先修复。
+
+---
+
+## 15. 实现进展（P0–P2 已落地）
+
+> 本章记录**代码实际长成的样子**，与前文的设计意图对照。分支 `feat/toolfsd-rbac-mount`，
+> 五个提交：P0 安全地基 → P1 授权接入 → P2 挂载视图 → 注释统一 → toolfsd 守护进程。
+> 真机验证于 10.0.0.75（Linux 6.18.9）。
+
+### 15.1 已交付
+
+| 阶段 | 状态 | 关键文件 |
+|---|---|---|
+| **P0** 安全地基 | ✅ S1–S6 全修，先红后绿 | `pathsec.go`、`securepath.go`、`toolfs.go`、`sandbox.go` |
+| **P1** 授权接入 | ✅ 逐行 Grant + 不可变快照 | `rbac.go`、`permission_provider.go` |
+| **P2** per-user 挂载 | ✅ **原验收标准真机通过** | `identity.go`、`namespace.go`、`fuse_rbac.go`、`mountset.go` |
+| **toolfsd 服务** | ✅ 守护进程 + 控制接口 | `control.go`、`cmd/toolfsd/main.go` |
+| P3 保护链 / P4 闪回 | ⬜ 未开始 | —— |
+
+**当前挂载是只读的**：写入返回 `EROFS`。在回收站与版本（P3）落地前放开覆盖写，
+恰恰就是本方案要消除的误删风险。
+
+### 15.2 实现与设计稿的差异（均为落地时的修正）
+
+| # | 设计稿写的 | 实际实现 | 原因 |
+|---|---|---|---|
+| 1 | `Operation` / `OpRead…` | **`AccessOp`** / `OpRead…` | `skills.go:690` 已有 `type Operation struct`，名字冲突 |
+| 2 | 手写 `openat2(RESOLVE_BENEATH)` | **`os.Root`**（Go 1.24） | 其 Linux 实现内部就是 `openat2(RESOLVE_BENEATH)`，由 Go 团队维护，比自写 syscall 更可靠。代价：`go.mod` 从 1.21 升到 **1.24**，抬高了本库消费者的最低 Go 版本 |
+| 3 | 扩展 `Session` 加 `View` 字段 | **另起一套 FUSE 节点**（`instanceRoot/instanceDir/instanceFile`） | legacy `ToolFSRoot` 会暴露 `memory`/`rag`/skill mounts；分开两棵树使 RBAC 路径**不可能**回归既有行为，也避免「持有文件 Grant 即开放虚拟后端」 |
+| 4 | 挂载点 `/mnt/toolfs/<user-id>/workspace/` | **`<root>/u<uid>/workspace`** | 目录名取数字 uid 并加 `u` 前缀；用户名属可被影响的数据，不应未经校验插进路径 |
+| 5 | `MountForIdentity(ctx, toolfs, mountPoint, identity, caps, config)` | 参数改为 `(ctx, resolver, provider, agentUserID, mountPoint, caps, config)` | 身份解析与授权拉取下沉进函数内部，调用方不必自己拼装 identity |
+| 6 | —— | 新增 **`FUSEAvailable()`** 前置探测 | go-fuse 在无 FUSE 实现时**挂起而非报错**；且 macOS 常残留 `osxfuse.fs` 目录（本机即 2022 年残留、kext 未加载），故按**设备节点**判定而非按目录判定 |
+| 7 | 分段前缀匹配只认 `/` | 边界另认 **`?`** | 虚拟后端把查询串编码在路径里（`/toolfs/rag?text=x`，`readRAG` 按 `?` 切分）。放宽不引入逃逸风险：字符串匹配只决定选中哪个挂载点，真正的边界由 `RootHandle` 在内核层守住 |
+
+### 15.3 控制接口（供 `agentd` 对接）
+
+unix socket 上的 HTTP，**权限 0600**——一次挂载请求等同于把某人的授权投射到文件系统上，
+不能对本机所有用户开放，也不应暴露端口。
+
+```
+GET    /healthz                      → {"status":"ok","mounts":N}
+GET    /v1/mounts                    → {"mounts":[…]}
+POST   /v1/mounts                    → 201 建挂载；200 已存在（幂等）；403 账号未绑定
+       {"agent_user_id":"…", "allow_delete":false, "deny_patterns":[…]}
+DELETE /v1/mounts/{agentUserID}      → 204 / 404
+```
+
+`POST` 的响应同时给出 **`bind_source`** 与 **`mount_point`**：
+
+```json
+{"username":"alice","user_id":1001,
+ "bind_source":"/mnt/toolfs/u1001",
+ "mount_point":"/mnt/toolfs/u1001/workspace"}
+```
+
+**`agentd` 要 bind 的是 `bind_source`（父目录），不是 `mount_point`。** 这正是 §6.6 的结论：
+bind 源若取挂载点本身，toolfsd 重挂后容器会静默沿用旧视图，使撤权失效。
+
+### 15.4 真机验证记录（10.0.0.75）
+
+```
+alice 挂载点 → Documents      bob 挂载点 → Media
+alice 访问 Media      → No such file or directory
+bob   访问 Documents  → No such file or directory
+读授权内文件          → hello-from-documents
+未绑定 agent 账号     → HTTP 403
+SIGTERM               → 2 个挂载全部卸载，socket 已删除，无残留
+```
+
+测试：控制接口 6 项 + 挂载 4 项全 PASS；Linux 全量 PASS；本地 `go test` / `-race` / `vet`
+全绿，既有 101 个测试无回归。
+
+### 15.5 尚未实现的设计内容
+
+以下在前文有设计、但代码里还没有：
+
+- **P3 保护链**：回收站、文件版本、排除规则、per-device StateRoot、审计落盘（§7.2–7.3）
+- **P4 恢复能力**：三层恢复源、闪回、会话级撤销、`.toolfs/` 只读控制视图（§7.4–7.8、§14.9）
+- **权限判定缓存**：§6.4 提到的 `(generation, path, op)` 应用层缓存尚未加，当前每次判定都走 Trie
+- **`FilesServiceProvider` 的真实联调**：上游逐行 Grant 接口未就绪，当前以 `StaticPermissionProvider` 与 httptest 桩覆盖；端点路径 `/v2_1/files/users/{u}/grants` 是**假定值**，需与 IceWhale-Files 对齐
+- **撤权的主动失效**：现为 TTL 到期后重建视图；`NotifyEntry`/`NotifyContent` 尚未接入
+
