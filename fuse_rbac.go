@@ -100,7 +100,15 @@ func MountForIdentity(
 	if err := view.openRoots(); err != nil {
 		return nil, err
 	}
+	return mountView(mountPoint, view, config)
+}
 
+// mountView serves an already-built view whose roots are already open.
+//
+// Split out from MountForIdentity so a caller that needs to configure the view
+// first — stamping the agent-side session and task labels, for instance — can
+// still reach the same mount path.
+func mountView(mountPoint string, view *InstanceView, config MountConfig) (MountHandle, error) {
 	root := &instanceRoot{view: view}
 
 	zero := time.Duration(0)

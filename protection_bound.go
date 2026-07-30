@@ -178,6 +178,11 @@ func (p *boundProtection) ListTrash() ([]TrashEntry, error) {
 // the size ceiling, or inside the debounce window. Those are policy outcomes,
 // not failures, and the caller proceeds with the write either way.
 func (p *boundProtection) CaptureVersion(username, rel string) (*VersionEntry, error) {
+	return p.captureVersion(username, rel, false)
+}
+
+// captureVersion is CaptureVersion with an explicit debounce override.
+func (p *boundProtection) captureVersion(username, rel string, force bool) (*VersionEntry, error) {
 	if isReservedRel(rel) || p.excluded(rel) {
 		return nil, nil
 	}
@@ -195,7 +200,7 @@ func (p *boundProtection) CaptureVersion(username, rel string) (*VersionEntry, e
 	if p.policy.MaxVersionFileSize > 0 && info.Size() > p.policy.MaxVersionFileSize {
 		return nil, nil
 	}
-	if !p.shouldVersion(rel) {
+	if !force && !p.shouldVersion(rel) {
 		return nil, nil
 	}
 
@@ -225,6 +230,19 @@ func (p *boundProtection) CaptureVersion(username, rel string) (*VersionEntry, e
 	p.markVersioned(rel)
 	p.pruneVersions(rel)
 	return entry, nil
+}
+
+// latestVersionID returns the most recent retained version for a path.
+//
+// Needed because a write can be debounced: the previous content is already
+// preserved by an earlier capture in the same window, and the journal entry
+// must point at that one rather than record "nothing preserved".
+func (p *boundProtection) latestVersionID(rel string) string {
+	versions, err := p.ListVersions(rel)
+	if err != nil || len(versions) == 0 {
+		return ""
+	}
+	return versions[0].ID
 }
 
 // ListVersions returns retained versions for a path, newest first.

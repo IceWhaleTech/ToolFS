@@ -76,7 +76,12 @@ func (d *instanceDir) Create(ctx context.Context, name string, flags uint32, mod
 	out.Mode = syscall.S_IFREG | fileMode(d.entry)
 	inode := d.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFREG})
 
-	return inode, &instanceWriteHandle{view: d.view, entry: d.entry, rel: childRel}, fuse.FOPEN_DIRECT_IO, 0
+	return inode, &instanceWriteHandle{
+		view: d.view, entry: d.entry, rel: childRel,
+		// Create has just made the file, so a later ReadFile would succeed and
+		// wrongly suggest it pre-existed. Record the truth here instead.
+		isNew: true,
+	}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // Mkdir creates a directory.
@@ -96,6 +101,7 @@ func (d *instanceDir) Mkdir(ctx context.Context, name string, mode uint32, out *
 	if err := d.entry.root.Mkdir(childRel, 0o755); err != nil {
 		return nil, errnoFor(err)
 	}
+	d.entry.protection.journal(d.view, ProtectedChange{Op: MutationCreate, Path: childRel})
 
 	child := &instanceDir{view: d.view, entry: d.entry, rel: childRel}
 	out.SetEntryTimeout(0)
@@ -133,9 +139,13 @@ func (d *instanceDir) trash(childRel string) syscall.Errno {
 	if !d.view.Allows(d.entry, childRel, OpDelete) {
 		return syscall.EACCES
 	}
-	if _, err := d.entry.protection.Trash(d.view.Identity.Username, childRel); err != nil {
+	entry, err := d.entry.protection.Trash(d.view.Identity.Username, childRel)
+	if err != nil {
 		return errnoFor(err)
 	}
+	d.entry.protection.journal(d.view, ProtectedChange{
+		Op: MutationDelete, Path: childRel, Recovery: entry.ID,
+	})
 	return 0
 }
 
@@ -179,6 +189,11 @@ func (d *instanceDir) Rename(ctx context.Context, name string, newParent gofs.In
 	if err := d.entry.root.Rename(oldRel, newRel); err != nil {
 		return errnoFor(err)
 	}
+	size, mtime := d.entry.protection.afterState(newRel)
+	d.entry.protection.journal(d.view, ProtectedChange{
+		Op: MutationRename, Path: newRel, FromPath: oldRel,
+		AfterSize: size, AfterMtime: mtime,
+	})
 	return 0
 }
 
@@ -195,6 +210,13 @@ type instanceWriteHandle struct {
 	captured  bool
 	dirty     bool
 	committed bool
+	// versionID is the preserved content this write can be undone to. Empty
+	// when the file did not exist, in which case undo means removal.
+	versionID string
+	existed   bool
+	// isNew marks a handle returned from Create, so the undo of this write is
+	// a removal rather than a restore.
+	isNew bool
 }
 
 var (
@@ -211,12 +233,22 @@ func (h *instanceWriteHandle) Write(ctx context.Context, data []byte, off int64)
 	// Preserve the pre-modification content once per open, before the first
 	// byte is accepted.
 	if !h.captured {
-		if _, err := h.entry.protection.CaptureVersion(h.view.Identity.Username, h.rel); err != nil {
+		version, err := h.entry.protection.CaptureVersion(h.view.Identity.Username, h.rel)
+		if err != nil {
 			return 0, errnoFor(err)
+		}
+		if version != nil {
+			h.versionID = version.ID
+		} else if !h.isNew {
+			// The capture may have been debounced, or already taken by the
+			// truncate that preceded this open. Either way the previous content
+			// is preserved — point the journal at that capture.
+			h.versionID = h.entry.protection.latestVersionID(h.rel)
 		}
 		h.captured = true
 		if existing, err := h.entry.root.ReadFile(h.rel); err == nil {
 			h.buf = existing
+			h.existed = !h.isNew
 		}
 	}
 
@@ -241,6 +273,16 @@ func (h *instanceWriteHandle) Flush(ctx context.Context) syscall.Errno {
 		return errnoFor(err)
 	}
 	h.committed = true
+
+	op := MutationCreate
+	if h.existed {
+		op = MutationModify
+	}
+	size, mtime := h.entry.protection.afterState(h.rel)
+	h.entry.protection.journal(h.view, ProtectedChange{
+		Op: op, Path: h.rel, Recovery: h.versionID,
+		AfterSize: size, AfterMtime: mtime,
+	})
 	return 0
 }
 

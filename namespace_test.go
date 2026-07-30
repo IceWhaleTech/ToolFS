@@ -26,6 +26,10 @@ func twoUserFixture(t *testing.T) (base string, resolver *StaticIdentityResolver
 		if err := os.WriteFile(filepath.Join(full, "file.txt"), []byte(d), 0o644); err != nil {
 			t.Fatalf("写文件: %v", err)
 		}
+		// 任务开始前就存在的文件，供「删除后撤销」用例使用
+		if err := os.WriteFile(filepath.Join(full, "victim.txt"), []byte("VICTIM"), 0o644); err != nil {
+			t.Fatalf("写文件: %v", err)
+		}
 	}
 
 	resolver = NewStaticIdentityResolver(map[string]ZimaIdentity{

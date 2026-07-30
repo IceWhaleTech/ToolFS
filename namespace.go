@@ -57,6 +57,12 @@ type InstanceView struct {
 	// Policy governs trash and version behaviour for this instance.
 	Policy ProtectionPolicy
 
+	// SessionID and TaskID are agent-side labels stamped onto journal entries
+	// so an undo can select "everything that task did". They are supplied by
+	// the caller and are unrelated to the per-user mount granularity.
+	SessionID string
+	TaskID    string
+
 	// entries is keyed by VirtualName.
 	entries map[string]*NamespaceEntry
 	// order is the stable sorted listing used by Readdir.
