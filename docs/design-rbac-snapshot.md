@@ -2091,11 +2091,13 @@ ToolFS 落地后可收窄「agent 能碰哪些目录」，但**无法阻止未�
 
 ---
 
-## 15. 实现进展（P0–P2 已落地）
+## 15. 实现进展（P0–P4 已落地）
 
-> 本章记录**代码实际长成的样子**，与前文的设计意图对照。分支 `feat/toolfsd-rbac-mount`，
-> 五个提交：P0 安全地基 → P1 授权接入 → P2 挂载视图 → 注释统一 → toolfsd 守护进程。
+> 本章记录**代码实际长成的样子**，与前文的设计意图对照。分支 `feat/toolfsd-rbac-mount`。
 > 真机验证于 10.0.0.75（Linux 6.18.9）。
+>
+> 提交序列：P0 安全地基 → P1 授权接入 → P2 挂载视图 → 注释统一 → toolfsd 守护进程
+> → 文档同步 → P3 保护链 → 保护链接入 FUSE → P4 恢复能力 → 控制视图。
 
 ### 15.1 已交付
 
@@ -2105,24 +2107,92 @@ ToolFS 落地后可收窄「agent 能碰哪些目录」，但**无法阻止未�
 | **P1** 授权接入 | ✅ 逐行 Grant + 不可变快照 | `rbac.go`、`permission_provider.go` |
 | **P2** per-user 挂载 | ✅ **原验收标准真机通过** | `identity.go`、`namespace.go`、`fuse_rbac.go`、`mountset.go` |
 | **toolfsd 服务** | ✅ 守护进程 + 控制接口 | `control.go`、`cmd/toolfsd/main.go` |
-| P3 保护链 / P4 闪回 | ⬜ 未开始 | —— |
+| **P3** 保护链 | ✅ 回收站 + 版本，已接入 FUSE | `protection.go`、`protection_bound.go`、`fuse_mutate.go` |
+| **P4** 恢复能力 | ✅ 三层恢复源 + 闪回 + 任务级撤销 | `recovery.go` |
+| **控制视图** | ✅ `.toolfs/` 只读 | `fuse_control_view.go` |
 
-**当前挂载是只读的**：写入返回 `EROFS`。在回收站与版本（P3）落地前放开覆盖写，
-恰恰就是本方案要消除的误删风险。
+**挂载已可写，且写入受保护**：删除默认不授予（`EPERM`）；授予后 `rm` 进回收站而非
+真删；覆盖写、`Create` 覆盖既有文件、`truncate` 三条路径都先留存旧内容。
 
 ### 15.2 实现与设计稿的差异（均为落地时的修正）
 
 | # | 设计稿写的 | 实际实现 | 原因 |
 |---|---|---|---|
 | 1 | `Operation` / `OpRead…` | **`AccessOp`** / `OpRead…` | `skills.go:690` 已有 `type Operation struct`，名字冲突 |
-| 2 | 手写 `openat2(RESOLVE_BENEATH)` | **`os.Root`**（Go 1.24） | 其 Linux 实现内部就是 `openat2(RESOLVE_BENEATH)`，由 Go 团队维护，比自写 syscall 更可靠。代价：`go.mod` 从 1.21 升到 **1.24**，抬高了本库消费者的最低 Go 版本 |
+| 2 | 手写 `openat2(RESOLVE_BENEATH)` | **`os.Root`**（Go 1.24） | 其 Linux 实现内部就是 `openat2(RESOLVE_BENEATH)`，由 Go 团队维护，比自写 syscall 更可靠。代价：`go.mod` 从 1.21 升到 **1.25**（`os.Root.Rename` 需要 1.25），抬高了本库消费者的最低 Go 版本 |
 | 3 | 扩展 `Session` 加 `View` 字段 | **另起一套 FUSE 节点**（`instanceRoot/instanceDir/instanceFile`） | legacy `ToolFSRoot` 会暴露 `memory`/`rag`/skill mounts；分开两棵树使 RBAC 路径**不可能**回归既有行为，也避免「持有文件 Grant 即开放虚拟后端」 |
 | 4 | 挂载点 `/mnt/toolfs/<user-id>/workspace/` | **`<root>/u<uid>/workspace`** | 目录名取数字 uid 并加 `u` 前缀；用户名属可被影响的数据，不应未经校验插进路径 |
 | 5 | `MountForIdentity(ctx, toolfs, mountPoint, identity, caps, config)` | 参数改为 `(ctx, resolver, provider, agentUserID, mountPoint, caps, config)` | 身份解析与授权拉取下沉进函数内部，调用方不必自己拼装 identity |
 | 6 | —— | 新增 **`FUSEAvailable()`** 前置探测 | go-fuse 在无 FUSE 实现时**挂起而非报错**；且 macOS 常残留 `osxfuse.fs` 目录（本机即 2022 年残留、kext 未加载），故按**设备节点**判定而非按目录判定 |
-| 7 | 分段前缀匹配只认 `/` | 边界另认 **`?`** | 虚拟后端把查询串编码在路径里（`/toolfs/rag?text=x`，`readRAG` 按 `?` 切分）。放宽不引入逃逸风险：字符串匹配只决定选中哪个挂载点，真正的边界由 `RootHandle` 在内核层守住 |
+| 7 | **保护区在挂载点【外】的独立目录**（§7.3 per-device StateRoot） | **改到每个 Grant 根【之内】** `<grantRoot>/.toolfs-state/` | `os.Root` 无法表达跨 root 的 rename，而回收站正是一次 rename。改到 Grant 根内后全部操作经同一受约束句柄发起：**TOCTOU 消失**（rename 与包含性检查同一描述符）、**EXDEV 在构造上不可能**（必然同文件系统）。代价：保护区落在用户数据里，已对 FUSE 隐藏，但**仍须从 SMB 与 Files API 排除** |
+| 8 | `ChangeRecord` | **`ProtectedChange`** | `toolfs.go:275` 已有同名类型（属快照模块） |
+| 9 | —— | 跨 Grant rename 返回 **`EXDEV`** | 两个 Grant 权限可能不同、甚至不同文件系统；返回 EXDEV 后内核退化为 copy-then-delete，从而让删除重新走回受保护路径 |
+| 10 | —— | 控制视图必须**显式**拒绝变更 | 实测：不实现 handler 并不等于拒绝，go-fuse 默认行为下未实现的 `Unlink` 会**成功** |
+| 11 | 分段前缀匹配只认 `/` | 边界另认 **`?`** | 虚拟后端把查询串编码在路径里（`/toolfs/rag?text=x`，`readRAG` 按 `?` 切分）。放宽不引入逃逸风险：字符串匹配只决定选中哪个挂载点，真正的边界由 `RootHandle` 在内核层守住 |
 
-### 15.3 控制接口（供 `agentd` 对接）
+### 15.3 保护与恢复的实际语义
+
+**删除**：默认不授予，返回 `EPERM`（语义是「本实例不得删除」而非「路径不可达」）。
+授予 `AllowDelete` 后仍可恢复——条目 rename 进保护区而非 unlink。`rename` 移除了
+源名字，因此要求与删除同一权限。
+
+**版本护栏**三道，缺一不可（`/DATA` 是 ext4、无 reflink，每次留版本都是全量拷贝）：
+
+| 护栏 | 缺了会怎样 |
+|---|---|
+| 排除规则（`.git`/`node_modules`/`__pycache__` 等，按**路径分量**匹配） | 一次 `npm install` 即可打满仅剩 31G 的盘 |
+| 去抖 + 单文件版本数上限 | agent 是突发写入，每次保存都会产生一个版本 |
+| 低空间降级为「只保回收站」 | 把盘写满 |
+
+> 排除规则**只跳过版本留存，删除仍进回收站**——`.git` 本就有完整历史，但误删 `.git`
+> 依然要能恢复。
+
+**撤销**按逆序执行、冲突跳过并报告：
+
+- 逆序是必须的：任务先 `rename A→B` 再 `B→C`，正序撤销会在 B 上撞车
+- 冲突判定比对变更后记录的 `size`/`mtime`；不一致说明此后有他人改动（另一会话、
+  共享目录的另一用户、或 SMB），覆盖会毁掉那份工作
+- **部分成功**：一处冲突不废掉整次撤销，跳过项在报告中给出原因
+
+**恢复按【当前】授权判定**，而非内容被留存时的授权。否则撤权后仍能经旧版本把数据
+取回，撤权形同虚设。
+
+#### 落地时暴露并修复的三个 bug
+
+这三个都只有真机跑起来才会显形，值得记录：
+
+| 现象 | 根因 |
+|---|---|
+| 新建被记成「修改」，撤销时变成恢复而非移除 | `Create` 已经建了空文件，随后写句柄的 `ReadFile` 成功 → 误判为已存在。改为在 `Create` 处显式标记 `isNew` |
+| 修改撤销失败「无留存内容」 | `os.WriteFile` 以 `O_TRUNC` 打开会**先触发 `Setattr`**，它取走版本并**消耗了去抖窗口**，使写句柄自己的 `CaptureVersion` 返回 nil。改为回退引用该路径最近一次版本——内容确实已留存，只是不是这次留的 |
+| 闪回未留存「闪回前的内容」，误闪回不可撤销 | 闪回也被去抖挡住。闪回是一次**刻意的破坏性操作**，与突发写不同，改为强制取版本 |
+
+### 15.4 `.toolfs/` 只读控制视图
+
+让 agent 用一次普通读回答「我刚改了什么」「这个文件能回到哪些状态」，不必依赖带外
+API——agent 面前本来就是一个文件系统。
+
+```
+.toolfs/README                 用法说明
+.toolfs/changes.jsonl          本实例的受保护变更，最旧在前
+.toolfs/trash.jsonl            仍可恢复的删除条目
+.toolfs/restore-points.jsonl   各路径可回到的状态，最新在前
+```
+
+三条承重性质：
+
+1. **只读**，所有变更操作显式返回 `EROFS`。见 §15.2 第 10 条——不实现 handler 不等于拒绝。
+2. **按当前授权过滤，读取时求值**。撤权后条目立即消失，否则控制视图会成为绕过授权
+   取回内容的旁路。
+3. **每次读现生成 + direct IO**。缓存会让陈旧列表活过一次撤权。
+
+`restore-points` 只枚举本实例**实际动过**的路径，不遍历整个 Grant——遍历会把控制视图
+变成一份目录清单，泄露调用方本不会去枚举的内容。
+
+保留名优先于用户数据：名为 `.toolfs` 的 Grant 不能遮蔽控制视图（`sanitizeEntryName`
+拒绝产出该名字，`Lookup` 侧是这个保证的另一半）。
+
+### 15.5 控制接口（供 `agentd` 对接）
 
 unix socket 上的 HTTP，**权限 0600**——一次挂载请求等同于把某人的授权投射到文件系统上，
 不能对本机所有用户开放，也不应暴露端口。
@@ -2146,27 +2216,53 @@ DELETE /v1/mounts/{agentUserID}      → 204 / 404
 **`agentd` 要 bind 的是 `bind_source`（父目录），不是 `mount_point`。** 这正是 §6.6 的结论：
 bind 源若取挂载点本身，toolfsd 重挂后容器会静默沿用旧视图，使撤权失效。
 
-### 15.4 真机验证记录（10.0.0.75）
+### 15.6 真机验证记录（10.0.0.75）
+
+**隔离与编排**（拉起真实 daemon 走完整链路）：
 
 ```
 alice 挂载点 → Documents      bob 挂载点 → Media
 alice 访问 Media      → No such file or directory
 bob   访问 Documents  → No such file or directory
-读授权内文件          → hello-from-documents
 未绑定 agent 账号     → HTTP 403
 SIGTERM               → 2 个挂载全部卸载，socket 已删除，无残留
 ```
 
-测试：控制接口 6 项 + 挂载 4 项全 PASS；Linux 全量 PASS；本地 `go test` / `-race` / `vet`
-全绿，既有 101 个测试无回归。
+**保护与恢复**：
 
-### 15.5 尚未实现的设计内容
+```
+默认配置       rm file.txt        → 失败（删除默认不授予）
+授予 AllowDelete rm file.txt      → 成功，内容进 .toolfs-state/trash/
+覆盖写         echo x > file.txt  → 成功，覆盖前内容进 versions/
+只读 Grant     写 / 删            → 全部拒绝，且不创建保护区
+保护区         ls / stat / 读     → 挂载点内完全不可见
+
+一个任务改了 A、建了 B、删了 C  → UndoChanges({TaskID})
+  undo delete C -> applied     undo create B -> applied     undo modify A -> applied
+第三方绕过挂载点改动后再撤销      → skipped，并给出原因；其余项照常完成
+```
+
+测试规模：安全 S1–S6、授权、命名空间、挂载、控制接口、变更、恢复、控制视图
+各组用例。本地 `go test` / `-race` / `vet` 全绿，既有 101 个测试无回归；
+Linux 真机全量 PASS。
+
+> **本地跑绿不等于真的绿。** macOS 上没有 macFUSE，全部挂载类用例都会被跳过——
+> 加控制视图时把 `.toolfs` 计入了根目录集合断言，就是只有 Linux 真机才暴露的。
+> 涉及 FUSE 行为的改动必须在 Linux 上复验。
+
+### 15.7 尚未实现的设计内容
 
 以下在前文有设计、但代码里还没有：
 
-- **P3 保护链**：回收站、文件版本、排除规则、per-device StateRoot、审计落盘（§7.2–7.3）
-- **P4 恢复能力**：三层恢复源、闪回、会话级撤销、`.toolfs/` 只读控制视图（§7.4–7.8、§14.9）
-- **权限判定缓存**：§6.4 提到的 `(generation, path, op)` 应用层缓存尚未加，当前每次判定都走 Trie
-- **`FilesServiceProvider` 的真实联调**：上游逐行 Grant 接口未就绪，当前以 `StaticPermissionProvider` 与 httptest 桩覆盖；端点路径 `/v2_1/files/users/{u}/grants` 是**假定值**，需与 IceWhale-Files 对齐
+- **btrfs 快照**（§7.5–7.7）：范围外的可选增强，`/DATA` 是 ext4 用不上
+- **审计落盘**：`AuditLogger` 接口在，但受保护变更目前只写变更日志，未落独立审计文件（§9）
+- **权限判定缓存**：§6.4 的 `(generation, path, op)` 应用层缓存尚未加，当前每次判定都走 Trie
 - **撤权的主动失效**：现为 TTL 到期后重建视图；`NotifyEntry`/`NotifyContent` 尚未接入
+- **回收站与版本的保留策略**：`MinFreeBytes` 已用于降级判断，但定时清理（`PurgeTrash`）尚未实现——回收站的 rename 不释放空间，长期运行必须补上
+- **`FilesServiceProvider` 的真实联调**：上游逐行 Grant 接口未就绪，当前以
+  `StaticPermissionProvider` 与 httptest 桩覆盖；端点路径 `/v2_1/files/users/{u}/grants`
+  是**假定值**，需与 IceWhale-Files 对齐
+- **保护区的多通路排除**：`.toolfs-state` 已对 FUSE 隐藏，但**尚未从 SMB 与 Files API
+  排除**。不做这一步，被删内容可经其他通路读回——这是 §15.2 第 7 条那个设计修正
+  带来的连带要求，必须在联调清单里
 
