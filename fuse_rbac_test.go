@@ -77,6 +77,12 @@ func assertDirNames(t *testing.T, who, dir string, want []string) {
 	}
 	got := make([]string, 0, len(items))
 	for _, item := range items {
+		// The control view is always present at the root and is not derived
+		// from a grant, so it is excluded from grant-set assertions. Its own
+		// behaviour is covered by the control view tests.
+		if item.Name() == toolfsControlDir {
+			continue
+		}
 		got = append(got, item.Name())
 	}
 	sort.Strings(got)

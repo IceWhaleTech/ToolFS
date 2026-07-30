@@ -152,7 +152,11 @@ var (
 // effect without remounting.
 func (r *instanceRoot) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errno) {
 	names := r.view.Entries()
-	entries := make([]fuse.DirEntry, 0, len(names))
+	entries := make([]fuse.DirEntry, 0, len(names)+1)
+	// The control view is the one entry not derived from a grant. It leaks
+	// nothing beyond them: its contents are filtered by the same grants at
+	// read time (§14.9).
+	entries = append(entries, fuse.DirEntry{Name: toolfsControlDir, Mode: syscall.S_IFDIR})
 	for _, name := range names {
 		entries = append(entries, fuse.DirEntry{Name: name, Mode: syscall.S_IFDIR})
 	}
@@ -164,6 +168,17 @@ func (r *instanceRoot) Readdir(ctx context.Context) (gofs.DirStream, syscall.Err
 // An unknown name yields ENOENT, not EACCES: reporting "permission denied"
 // would confirm the path exists and leak the namespace shape.
 func (r *instanceRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofs.Inode, syscall.Errno) {
+	// Reserved names win over user data. A grant literally named ".toolfs"
+	// must not be able to shadow the control view; sanitizeEntryName already
+	// refuses to produce one, and this is the second half of that guarantee.
+	if name == toolfsControlDir {
+		child := &controlDir{view: r.view}
+		out.SetEntryTimeout(0)
+		out.SetAttrTimeout(0)
+		out.Mode = syscall.S_IFDIR | 0o555
+		return r.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	}
+
 	entry, ok := r.view.Entry(name)
 	if !ok {
 		return nil, syscall.ENOENT
