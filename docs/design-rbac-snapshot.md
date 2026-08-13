@@ -297,6 +297,7 @@ ZimaOS 只有 `read_only` 一个维度，「可写」即「可删」，这正是
 | **Agent** | `false` | `OpRead`, `OpList`, `OpCreate`, `OpModify`；`OpDelete` 另需 `AllowDelete` |
 
 用户侧「写蕴含删」是刻意的：否则会出现「经 SMB 能删、经 Photos 不能删」的反向不一致。
+**产品已确认接受 Member 无删除限制（2026-08-13），本表为定案。**
 
 **只读授权永远不能被 capability 提升为可写或可删**，对两类主体都成立。
 
