@@ -285,13 +285,20 @@ allow / deny + 实际 IO
 
 ### 4.1 操作粒度——ToolFS 的增量价值
 
-ZimaOS 只有 `read_only` 一个维度，「可写」即「可删」，这正是 agent 误删风险的根源。ToolFS 将其拆开：
+ZimaOS 只有 `read_only` 一个维度，「可写」即「可删」，这正是 agent 误删风险的根源。ToolFS 将其拆开——
+但**只对 Agent 拆**（对齐说明 §3.5）：删除收敛的动机就是防 agent 误删，而 Agent 从不经 SMB
+访问，因此不需要 SMB 能表达它；用户侧则与 Samba 的表达能力对齐，**share 表无需扩展**。
 
-| ZimaOS share | ToolFS 授予 |
-|---|---|
-| `read_only = true` | `OpRead`, `OpList` |
-| `read_only = false` | `OpRead`, `OpList`, `OpCreate`, `OpModify` |
-| `read_only = false` 且 capability 显式开启删除 | `OpDelete`；只读 Grant 永远不能被 capability 提升为可删 |
+| 主体 | `read_only` | ToolFS 授予 |
+|---|---|---|
+| **用户**（Owner / Member） | `true` | `OpRead`, `OpList` |
+| **用户** | `false` | `OpRead`, `OpList`, `OpCreate`, `OpModify`, **`OpDelete`** |
+| **Agent** | `true` | `OpRead`, `OpList` |
+| **Agent** | `false` | `OpRead`, `OpList`, `OpCreate`, `OpModify`；`OpDelete` 另需 `AllowDelete` |
+
+用户侧「写蕴含删」是刻意的：否则会出现「经 SMB 能删、经 Photos 不能删」的反向不一致。
+
+**只读授权永远不能被 capability 提升为可写或可删**，对两类主体都成立。
 
 ```go
 type Operation uint16
@@ -1393,7 +1400,7 @@ func NewFileAuditLogger(dir string) (*FileAuditLogger, error) // JSONL，按日�
 | 6 | IceWhale-Files 服务运行，`/run/casaos/icewhale-files.url` 在**宿主**可达 | 依赖 |
 | 7 | ~~agent 账号 → ZimaOS 授权主体的绑定方式~~ → **已消除**：业务需求 v0.3 确认为同一套账号体系 | ✅ 不再是阻塞项 |
 | 8 | ~~绑定后的 ZimaOS 凭据续期主体~~ → **已消除**，同上 | ✅ 不再是阻塞项 |
-| 12 | **授权模型扩展为读/写/删三标志** —— 现有 share 表只有 `read_only`，表达不了「可写不可删」（对齐说明 §3.2） | ⚠️ **模型阻塞项**（上游） |
+| 12 | ~~授权模型扩展为读/写/删三标志~~ → **已取消**：用户只给读/写（与 SMB 一致），删除收敛只对 Agent，现有 `read_only` 即够（对齐说明 §3.5） | ✅ 不再是阻塞项 |
 | 13 | **授权主体键支持 Agent** —— 现为 `samba_user`（Linux 用户名），而 Agent 不是 Linux 用户（对齐说明 §3.3） | ⚠️ **模型阻塞项**（上游） |
 | 14 | **发布授权变更事件** —— 业务要求「事件驱动的真正即时生效」，而 MessageBus 现无 share 变更事件（对齐说明 §3.4） | ⚠️ **新增阻塞项**（上游） |
 | 15 | **移除 `CheckPermission` 的 admin 放行** —— 否则无法表达「对 Owner 隐藏」（对齐说明 §3.1） | ⚠️ **语义阻塞项**（上游） |
@@ -2314,7 +2321,7 @@ Linux 真机全量 PASS。
 | P0 安全地基 | **无影响** |
 | P2 挂载视图、P3 保护链、P4 恢复、控制视图 | **无影响** —— 保护与恢复语义与授权模型正交 |
 | `IdentityResolver` | 接口保留，实现**退化**为「从会话直取身份」。绑定表与 fallback 过渡模式不再需要。<br>**这个抽象证明是对的**：前提被推翻，但接口没变、内部没动 |
-| `Grant{ReadOnly bool}` | **需改**为读/写/删三标志（依赖上游先扩展，§10 #12） |
+| `Grant{ReadOnly bool}` | **保持不变**；但 `Ops()` 需按主体类型分叉：用户「写⟹删」，Agent「删另需 `AllowDelete`」（对齐说明 §3.5） |
 | `AgentCapabilities` | **需加** `AllowedPaths` 路径子集收窄 |
 | `PermissionProvider` TTL 缓存 | **需改**为事件驱动（依赖上游事件，§10 #14） |
 | `InstanceView` 不可变 + 根节点固定指针 | **需改**为可原子替换（§6.2） |
