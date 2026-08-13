@@ -1392,7 +1392,7 @@ func NewFileAuditLogger(dir string) (*FileAuditLogger, error) // JSONL，按日�
 
 | # | 前置条件 | 状态 |
 |---|---|---|
-| 1 | **descriptor-based P0 路径安全必须先做**（§11.0）；不能以 `EvalSymlinks` containment 代替 | ⚠️ **实现阻塞项** |
+| 1 | ~~descriptor-based P0 路径安全必须先做~~ → **已完成**：S1–S6 全修并真机验证（§15.1） | ✅ 已交付 |
 | 2 | **宿主可部署 `toolfsd` 与 `agentd`**——宿主 rootfs 为只读 squashfs（§14.1），需借助可写分区或系统扩展 | ⚠️ **落地阻塞项** |
 | 3 | **`agentd`（实例容器编排）由谁实现、何时排期**（§14.2.2） | ⚠️ **落地阻塞项**（agent 团队） |
 | 4 | IceWhale-Files 提供修复后的逐用户 Grant 接口；现有 `/share` 不作为授权输入 | ⚠️ **联调阻塞项** |
@@ -2336,7 +2336,7 @@ Linux 真机全量 PASS。
 
 - **btrfs 快照**（§7.5–7.7）：范围外的可选增强，`/DATA` 是 ext4 用不上
 - **审计落盘**：`AuditLogger` 接口在，但受保护变更目前只写变更日志，未落独立审计文件（§9）
-- **权限判定缓存**：§6.4 的 `(generation, path, op)` 应用层缓存尚未加，当前每次判定都走 Trie
+- ~~权限判定缓存~~ → **已实现**：按 `(条目, 相对路径)` 记忆化，并按 generation 自校验失效
 - **撤权的主动失效**：现为 TTL 到期后重建视图；`NotifyEntry`/`NotifyContent` 尚未接入
 - **回收站与版本的保留策略**：`MinFreeBytes` 已用于降级判断，但定时清理（`PurgeTrash`）尚未实现——回收站的 rename 不释放空间，长期运行必须补上
 - **`FilesServiceProvider` 的真实联调**：上游逐行 Grant 接口未就绪，当前以
