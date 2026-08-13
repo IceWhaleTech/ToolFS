@@ -9,7 +9,9 @@ package toolfs
 // same path as one calling an API: both land on the FUSE handler.
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -216,5 +218,86 @@ func TestMutate_ReadOnlyGrantRejectsWrites(t *testing.T) {
 	content, _ := os.ReadFile(filepath.Join(roDir, "doc.txt"))
 	if string(content) != "ORIGINAL" {
 		t.Errorf("只读区文件被改成了 %q", string(content))
+	}
+}
+
+// 大文件读写。
+//
+// 这一条是被压测暴露出来的：此前 Read 返回 h.data[off:] 而忽略 len(dest)，
+// 内核按 4KB/128KB 分块请求时应答超长，写回失败（EINVAL），表现为
+// 【任何大于单次读块的文件都读成空】。既有用例全部使用几字节的小文件，
+// 恰好都小于一个读块，因此完全没有覆盖到。
+func TestMutate_LargeFileRoundTrip(t *testing.T) {
+	mnt, dataBase, cleanup := mountWritable(t, AgentCapabilities{})
+	defer cleanup()
+
+	// 刻意跨越常见读块大小（4KB、128KB）
+	for _, size := range []int{4096, 4097, 128 << 10, (128 << 10) + 1, 1 << 20} {
+		name := fmt.Sprintf("size-%d", size)
+		t.Run(name, func(t *testing.T) {
+			payload := make([]byte, size)
+			for i := range payload {
+				payload[i] = byte(i % 251)
+			}
+
+			target := filepath.Join(mnt, "Documents", name+".bin")
+			if err := os.WriteFile(target, payload, 0o644); err != nil {
+				t.Fatalf("写入 %d 字节: %v", size, err)
+			}
+
+			got, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("读回 %d 字节: %v", size, err)
+			}
+			if len(got) != size {
+				t.Fatalf("读回 %d 字节，期望 %d —— 大于一个读块的文件被读成了空/截断", len(got), size)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Errorf("内容不一致（长度对但字节不同）")
+			}
+
+			// 后端落盘也必须一致
+			backing := filepath.Join(dataBase, "Documents", name+".bin")
+			onDisk, err := os.ReadFile(backing)
+			if err != nil {
+				t.Fatalf("读后端: %v", err)
+			}
+			if !bytes.Equal(onDisk, payload) {
+				t.Errorf("后端落盘内容与写入不一致")
+			}
+		})
+	}
+}
+
+// 随机偏移写入（非顺序）——流式写句柄用 WriteAt，必须支持。
+func TestMutate_RandomOffsetWrites(t *testing.T) {
+	mnt, _, cleanup := mountWritable(t, AgentCapabilities{})
+	defer cleanup()
+
+	target := filepath.Join(mnt, "Documents", "sparse.bin")
+	f, err := os.OpenFile(target, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("打开: %v", err)
+	}
+	// 先写靠后的偏移，再写靠前的
+	if _, err := f.WriteAt([]byte("TAIL"), 8192); err != nil {
+		t.Fatalf("写偏移 8192: %v", err)
+	}
+	if _, err := f.WriteAt([]byte("HEAD"), 0); err != nil {
+		t.Fatalf("写偏移 0: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("关闭: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("读回: %v", err)
+	}
+	if len(got) != 8196 {
+		t.Fatalf("文件长度 %d，期望 8196", len(got))
+	}
+	if string(got[:4]) != "HEAD" || string(got[8192:]) != "TAIL" {
+		t.Errorf("偏移写入的内容不正确：头 %q 尾 %q", got[:4], got[8192:])
 	}
 }

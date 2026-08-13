@@ -129,6 +129,9 @@ func TestRecovery_ConflictIsSkippedNotClobbered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("撤销: %v", err)
 	}
+	for _, r := range report.Results {
+		t.Logf("undo %s %s -> %s %s", r.Change.Op, r.Change.Path, r.Outcome, r.Reason)
+	}
 	if report.Skipped == 0 {
 		t.Errorf("冲突未被跳过: %+v", report)
 	}

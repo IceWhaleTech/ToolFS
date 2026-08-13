@@ -44,7 +44,35 @@ type RootHandle interface {
 	Rename(oldRel, newRel string) error
 	Create(rel string, perm os.FileMode) error
 
+	// OpenRead returns a readable handle for streaming.
+	//
+	// Slurping the whole file at open instead would allocate its full length
+	// per open — fatal for a filesystem expected to serve large media.
+	OpenRead(rel string) (ReadableFile, error)
+
+	// OpenWrite returns a writable handle for streaming.
+	//
+	// Buffering a whole file in memory instead would make every write
+	// reallocate and copy the accumulated content — quadratic in file size —
+	// and would put the file's full length in RAM. Neither is acceptable for
+	// a filesystem that may serve large media files.
+	OpenWrite(rel string, perm os.FileMode) (WritableFile, error)
+
 	// Close releases the held descriptors.
+	Close() error
+}
+
+// ReadableFile is a streaming read handle confined to a root.
+type ReadableFile interface {
+	ReadAt(p []byte, off int64) (int, error)
+	Close() error
+}
+
+// WritableFile is a streaming write handle confined to a root.
+type WritableFile interface {
+	WriteAt(p []byte, off int64) (int, error)
+	Truncate(size int64) error
+	Sync() error
 	Close() error
 }
 
@@ -140,6 +168,14 @@ func (h *osRootHandle) Create(rel string, perm os.FileMode) error {
 		return err
 	}
 	return f.Close()
+}
+
+func (h *osRootHandle) OpenRead(rel string) (ReadableFile, error) {
+	return h.root.Open(normalizeRel(rel))
+}
+
+func (h *osRootHandle) OpenWrite(rel string, perm os.FileMode) (WritableFile, error) {
+	return h.root.OpenFile(normalizeRel(rel), os.O_WRONLY|os.O_CREATE, perm)
 }
 
 func (h *osRootHandle) Close() error {

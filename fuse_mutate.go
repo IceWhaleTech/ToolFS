@@ -19,6 +19,7 @@ package toolfs
 
 import (
 	"context"
+	"sync"
 	"syscall"
 
 	gofs "github.com/hanwen/go-fuse/v2/fs"
@@ -197,23 +198,27 @@ func (d *instanceDir) Rename(ctx context.Context, name string, newParent gofs.In
 	return 0
 }
 
-// instanceWriteHandle buffers a write and commits it on flush.
+// instanceWriteHandle streams writes straight to the backing file.
 //
-// Buffering exists so the previous content can be preserved exactly once, at
-// the moment the file is first modified, rather than on every partial write.
+// It deliberately does not buffer the file in memory. An earlier version did,
+// growing a slice on every write — that is quadratic in file size and puts the
+// whole file in RAM, which showed up immediately under load.
+//
+// The previous content is preserved exactly once, before the first byte is
+// accepted, rather than on every partial write.
 type instanceWriteHandle struct {
 	view  *InstanceView
 	entry *NamespaceEntry
 	rel   string
 
-	buf       []byte
+	// mu guards the lazily-opened file: the kernel may issue concurrent writes
+	// against one handle.
+	mu        sync.Mutex
+	file      WritableFile
 	captured  bool
-	dirty     bool
-	committed bool
-	// versionID is the preserved content this write can be undone to. Empty
-	// when the file did not exist, in which case undo means removal.
 	versionID string
-	existed   bool
+	dirty     bool
+	journaled bool
 	// isNew marks a handle returned from Create, so the undo of this write is
 	// a removal rather than a restore.
 	isNew bool
@@ -225,58 +230,98 @@ var (
 	_ gofs.FileReleaser = (*instanceWriteHandle)(nil)
 )
 
-func (h *instanceWriteHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
-	if !h.view.Allows(h.entry, h.rel, OpModify) {
-		return 0, syscall.EACCES
+// ensureOpen captures the previous content once, then opens the backing file.
+// Callers must hold h.mu.
+func (h *instanceWriteHandle) ensureOpen() syscall.Errno {
+	if h.file != nil {
+		return 0
 	}
-
-	// Preserve the pre-modification content once per open, before the first
-	// byte is accepted.
 	if !h.captured {
+		// A newly created file has no previous content worth preserving. Skipping
+		// the capture is not just an optimization: Create has already made an
+		// empty file, so the capture would see it as "existing" and store an
+		// empty version for every single create — and version pruning scans all
+		// metadata, making bulk file creation quadratic.
+		if h.isNew {
+			h.captured = true
+			return h.openBacking()
+		}
+
 		version, err := h.entry.protection.CaptureVersion(h.view.Identity.Username, h.rel)
 		if err != nil {
-			return 0, errnoFor(err)
+			return errnoFor(err)
 		}
 		if version != nil {
 			h.versionID = version.ID
-		} else if !h.isNew {
+		} else {
 			// The capture may have been debounced, or already taken by the
 			// truncate that preceded this open. Either way the previous content
 			// is preserved — point the journal at that capture.
 			h.versionID = h.entry.protection.latestVersionID(h.rel)
 		}
 		h.captured = true
-		if existing, err := h.entry.root.ReadFile(h.rel); err == nil {
-			h.buf = existing
-			h.existed = !h.isNew
-		}
 	}
-
-	end := off + int64(len(data))
-	if end > int64(len(h.buf)) {
-		grown := make([]byte, end)
-		copy(grown, h.buf)
-		h.buf = grown
-	}
-	copy(h.buf[off:end], data)
-	h.dirty = true
-	return uint32(len(data)), 0
+	return h.openBacking()
 }
 
-// Flush commits buffered content. Errors surface here rather than at Release,
-// so a failed write is reported to the caller that issued close().
-func (h *instanceWriteHandle) Flush(ctx context.Context) syscall.Errno {
-	if !h.dirty || h.committed {
-		return 0
-	}
-	if err := h.entry.root.WriteFile(h.rel, h.buf, 0o644); err != nil {
+// openBacking opens the backing file for writing. Callers must hold h.mu.
+func (h *instanceWriteHandle) openBacking() syscall.Errno {
+	file, err := h.entry.root.OpenWrite(h.rel, 0o644)
+	if err != nil {
 		return errnoFor(err)
 	}
-	h.committed = true
+	h.file = file
+	return 0
+}
 
-	op := MutationCreate
-	if h.existed {
-		op = MutationModify
+func (h *instanceWriteHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
+	if !h.view.Allows(h.entry, h.rel, OpModify) {
+		return 0, syscall.EACCES
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if errno := h.ensureOpen(); errno != 0 {
+		return 0, errno
+	}
+	written, err := h.file.WriteAt(data, off)
+	if err != nil {
+		return uint32(written), errnoFor(err)
+	}
+	h.dirty = true
+	return uint32(written), 0
+}
+
+// Flush pushes pending data out and records the change.
+//
+// Both happen here rather than in Release because RELEASE is asynchronous:
+// close() only triggers FLUSH synchronously, and the kernel may deliver RELEASE
+// well after close() returns. Journalling from Release therefore loses the
+// record for anything read back promptly — which is exactly what an agent does
+// when it finishes a task and immediately asks what changed.
+//
+// A journaled flag keeps it to one entry, since Flush can fire several times
+// for one open.
+func (h *instanceWriteHandle) Flush(ctx context.Context) syscall.Errno {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.file == nil {
+		return 0
+	}
+	// Deliberately no Sync() here. FUSE delivers FSYNC as its own operation, so
+	// forcing a flush-to-disk on every close would fsync once per file — which
+	// dominates small-file workloads (measured ~7ms per create) for a guarantee
+	// the caller did not ask for.
+	if !h.dirty || h.journaled {
+		return 0
+	}
+	h.journaled = true
+
+	op := MutationModify
+	if h.isNew {
+		op = MutationCreate
 	}
 	size, mtime := h.entry.protection.afterState(h.rel)
 	h.entry.protection.journal(h.view, ProtectedChange{
@@ -286,8 +331,18 @@ func (h *instanceWriteHandle) Flush(ctx context.Context) syscall.Errno {
 	return 0
 }
 
+// Release closes the backing descriptor. The change was already recorded by
+// Flush; see the note there on why it cannot be done here.
 func (h *instanceWriteHandle) Release(ctx context.Context) syscall.Errno {
-	return h.Flush(ctx)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.file == nil {
+		return 0
+	}
+	err := h.file.Close()
+	h.file = nil
+	return errnoFor(err)
 }
 
 var _ gofs.NodeSetattrer = (*instanceFile)(nil)

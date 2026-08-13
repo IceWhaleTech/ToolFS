@@ -20,6 +20,7 @@ package toolfs
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"syscall"
 	"time"
@@ -48,6 +49,15 @@ type MountConfig struct {
 	AllowOther bool
 	// Debug enables go-fuse protocol logging.
 	Debug bool
+
+	// CacheTimeout, when greater than zero, lets the kernel cache directory
+	// entries, attributes and file content for that long.
+	//
+	// It defaults to zero — no caching — because a cached entry outliving a
+	// revoked grant would serve data the user is no longer allowed to see.
+	// Enabling it is only safe once revocation is event-driven, so that a
+	// permission change can actively invalidate rather than wait for a TTL.
+	CacheTimeout time.Duration
 }
 
 // mountHandle is the concrete MountHandle.
@@ -109,13 +119,14 @@ func MountForIdentity(
 // first — stamping the agent-side session and task labels, for instance — can
 // still reach the same mount path.
 func mountView(mountPoint string, view *InstanceView, config MountConfig) (MountHandle, error) {
+	view.CacheTimeout = config.CacheTimeout
 	root := &instanceRoot{view: view}
 
-	zero := time.Duration(0)
+	ttl := config.CacheTimeout
 	opts := &gofs.Options{
-		EntryTimeout:    &zero,
-		AttrTimeout:     &zero,
-		NegativeTimeout: &zero,
+		EntryTimeout:    &ttl,
+		AttrTimeout:     &ttl,
+		NegativeTimeout: &ttl,
 	}
 	opts.MountOptions.Name = "toolfs"
 	opts.MountOptions.FsName = "toolfs-" + view.Identity.Username
@@ -270,7 +281,7 @@ func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 
 func (d *instanceDir) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = syscall.S_IFDIR | entryMode(d.entry)
-	out.SetTimeout(0)
+	out.SetTimeout(d.view.CacheTimeout)
 	return 0
 }
 
@@ -324,27 +335,77 @@ func (f *instanceFile) Open(ctx context.Context, flags uint32) (gofs.FileHandle,
 			fuse.FOPEN_DIRECT_IO, 0
 	}
 
-	data, err := f.entry.root.ReadFile(f.rel)
+	file, err := f.entry.root.OpenRead(f.rel)
 	if err != nil {
 		return nil, 0, errnoFor(err)
 	}
-	// FOPEN_DIRECT_IO keeps the kernel from caching content, so revoking a
-	// grant is not defeated by a page cache hit.
-	return &instanceFileHandle{data: data}, fuse.FOPEN_DIRECT_IO, 0
+	// Without caching, FOPEN_DIRECT_IO keeps the kernel from serving a page
+	// cache hit that would survive a revoked grant. With caching deliberately
+	// enabled, that protection moves to event-driven invalidation instead.
+	if f.view.CacheTimeout > 0 {
+		return &instanceFileHandle{file: file}, fuse.FOPEN_KEEP_CACHE, 0
+	}
+	return &instanceFileHandle{file: file}, fuse.FOPEN_DIRECT_IO, 0
 }
 
-// instanceFileHandle serves a snapshot of the file taken at open time.
+// instanceFileHandle streams from the backing file.
+//
+// It holds a descriptor rather than the file's content: buffering would put the
+// whole file in memory on every open.
 type instanceFileHandle struct {
+	file ReadableFile
+	// data serves generated content (the control view), which is small and has
+	// no backing descriptor.
 	data []byte
 }
 
-var _ gofs.FileReader = (*instanceFileHandle)(nil)
+var (
+	_ gofs.FileReader   = (*instanceFileHandle)(nil)
+	_ gofs.FileReleaser = (*instanceFileHandle)(nil)
+)
 
+// Release closes the descriptor, if this handle holds one.
+func (h *instanceFileHandle) Release(ctx context.Context) syscall.Errno {
+	if h.file != nil {
+		err := h.file.Close()
+		h.file = nil
+		return errnoFor(err)
+	}
+	return 0
+}
+
+// Read serves a slice of the snapshot taken at open time.
+//
+// The returned slice must not exceed len(dest): the kernel sized its reply
+// buffer to exactly that, and handing back more makes the write of the reply
+// fail with EINVAL — which surfaces as a file that reads as empty. Any file
+// larger than one read block is affected, so this bound is load-bearing.
 func (h *instanceFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	if off < 0 || off > int64(len(h.data)) {
+	if off < 0 {
 		return fuse.ReadResultData(nil), 0
 	}
-	return fuse.ReadResultData(h.data[off:]), 0
+
+	// Streaming case: read straight into the reply buffer.
+	if h.file != nil {
+		read, err := h.file.ReadAt(dest, off)
+		if err != nil && read == 0 && !errors.Is(err, io.EOF) {
+			return nil, errnoFor(err)
+		}
+		return fuse.ReadResultData(dest[:read]), 0
+	}
+
+	// Generated content. The returned slice must not exceed len(dest): the
+	// kernel sized its reply buffer to exactly that, and handing back more
+	// makes the reply write fail with EINVAL — which surfaces as a file that
+	// reads as empty.
+	if off >= int64(len(h.data)) {
+		return fuse.ReadResultData(nil), 0
+	}
+	end := off + int64(len(dest))
+	if end > int64(len(h.data)) {
+		end = int64(len(h.data))
+	}
+	return fuse.ReadResultData(h.data[off:end]), 0
 }
 
 // entryMode renders directory permission bits from the grant.

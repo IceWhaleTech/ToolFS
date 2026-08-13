@@ -18,6 +18,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ErrNoIdentity indicates a mount was requested without a resolved identity.
@@ -56,6 +57,10 @@ type InstanceView struct {
 
 	// Policy governs trash and version behaviour for this instance.
 	Policy ProtectionPolicy
+
+	// CacheTimeout mirrors MountConfig.CacheTimeout, so the node handlers can
+	// decide whether to ask the kernel to cache.
+	CacheTimeout time.Duration
 
 	// SessionID and TaskID are agent-side labels stamped onto journal entries
 	// so an undo can select "everything that task did". They are supplied by
