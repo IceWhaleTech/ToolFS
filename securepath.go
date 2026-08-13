@@ -64,6 +64,9 @@ type RootHandle interface {
 	// a filesystem that may serve large media files.
 	OpenWrite(rel string, perm os.FileMode) (WritableFile, error)
 
+	// FreeBytes reports space available to the caller on this root's filesystem.
+	FreeBytes() (uint64, error)
+
 	// Close releases the held descriptors.
 	Close() error
 }
@@ -206,6 +209,10 @@ func (h *osRootHandle) CloneFile(srcRel, dstRel string, perm os.FileMode) error 
 
 func (h *osRootHandle) OpenWrite(rel string, perm os.FileMode) (WritableFile, error) {
 	return h.root.OpenFile(normalizeRel(rel), os.O_WRONLY|os.O_CREATE, perm)
+}
+
+func (h *osRootHandle) FreeBytes() (uint64, error) {
+	return freeBytes(h.root.Name())
 }
 
 func (h *osRootHandle) Close() error {

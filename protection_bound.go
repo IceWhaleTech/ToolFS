@@ -197,6 +197,12 @@ func (p *boundProtection) Restore(id string) (*TrashEntry, error) {
 	return &entry, nil
 }
 
+// unmarshalQuiet decodes JSON and reports success, so callers can skip records
+// that cannot be read rather than failing a whole listing.
+func unmarshalQuiet(data []byte, out any) bool {
+	return json.Unmarshal(data, out) == nil
+}
+
 // ListTrash returns trash entries, newest first.
 func (p *boundProtection) ListTrash() ([]TrashEntry, error) {
 	var out []TrashEntry
@@ -241,6 +247,16 @@ func (p *boundProtection) captureVersion(username, rel string, force bool) (*Ver
 	}
 	if !force && !p.shouldVersion(rel) {
 		return nil, nil
+	}
+
+	// Degrade to trash-only when space runs short. Versions are a convenience;
+	// filling the disk breaks everything, including the trash that deletion
+	// depends on. Cloned versions cost no space, so the check does not apply
+	// to them.
+	if !p.cloneSupported && p.policy.MinFreeBytes > 0 {
+		if free, err := p.root.FreeBytes(); err == nil && free < uint64(p.policy.MinFreeBytes) {
+			return nil, nil
+		}
 	}
 
 	id := p.nextID()
