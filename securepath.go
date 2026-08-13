@@ -10,6 +10,7 @@ package toolfs
 // descriptor and issues every real IO from there.
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -50,6 +51,11 @@ type RootHandle interface {
 	// per open — fatal for a filesystem expected to serve large media.
 	OpenRead(rel string) (ReadableFile, error)
 
+	// CloneFile makes dstRel share srcRel's extents (copy-on-write) instead of
+	// copying them. Returns ErrCloneUnsupported when the filesystem cannot,
+	// so the caller can fall back to a full copy.
+	CloneFile(srcRel, dstRel string, perm os.FileMode) error
+
 	// OpenWrite returns a writable handle for streaming.
 	//
 	// Buffering a whole file in memory instead would make every write
@@ -67,6 +73,9 @@ type ReadableFile interface {
 	ReadAt(p []byte, off int64) (int, error)
 	Close() error
 }
+
+// ErrCloneUnsupported reports that the filesystem cannot share extents.
+var ErrCloneUnsupported = errors.New("toolfs: copy-on-write cloning unsupported")
 
 // WritableFile is a streaming write handle confined to a root.
 type WritableFile interface {
@@ -172,6 +181,27 @@ func (h *osRootHandle) Create(rel string, perm os.FileMode) error {
 
 func (h *osRootHandle) OpenRead(rel string) (ReadableFile, error) {
 	return h.root.Open(normalizeRel(rel))
+}
+
+func (h *osRootHandle) CloneFile(srcRel, dstRel string, perm os.FileMode) error {
+	src, err := h.root.Open(normalizeRel(srcRel))
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := h.root.OpenFile(normalizeRel(dstRel), os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+
+	if err := cloneFile(dst, src); err != nil {
+		dst.Close()
+		// Leave no partial file behind: the caller will fall back to copying.
+		_ = h.root.Remove(normalizeRel(dstRel))
+		return ErrCloneUnsupported
+	}
+	return dst.Close()
 }
 
 func (h *osRootHandle) OpenWrite(rel string, perm os.FileMode) (WritableFile, error) {

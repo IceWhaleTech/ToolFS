@@ -6,6 +6,7 @@ package toolfs
 // P3 protection chain tests.
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -304,5 +305,79 @@ func TestRestoreRefusesToClobber(t *testing.T) {
 	current, _ := os.ReadFile(target)
 	if string(current) != "NEW" {
 		t.Errorf("现有文件被改成了 %q", string(current))
+	}
+}
+
+// reflink 自适应：能力靠实测探测，而非按文件系统名推断。
+func TestCloneCapabilityIsProbed(t *testing.T) {
+	root, _ := newStateRoot(t, DefaultProtectionPolicy())
+	_ = root
+
+	backend := newSecureBackend()
+	handle, err := backend.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("打开根: %v", err)
+	}
+	defer handle.Close()
+
+	p, err := newBoundProtection(handle, DefaultProtectionPolicy())
+	if err != nil {
+		t.Fatalf("建保护链: %v", err)
+	}
+
+	t.Logf("本机文件系统的 reflink 支持: %v", p.CloneSupported())
+
+	// 支持时，大小上限必须被解除——上限存在的唯一理由是限制全量拷贝的代价，
+	// 而 reflink 没有这个代价。
+	if p.CloneSupported() && p.policy.MaxVersionFileSize != 0 {
+		t.Errorf("支持 reflink 但仍保留了 %d 字节的大小上限", p.policy.MaxVersionFileSize)
+	}
+	if !p.CloneSupported() && p.policy.MaxVersionFileSize == 0 {
+		t.Error("不支持 reflink 却解除了大小上限——全量拷贝会失去约束")
+	}
+}
+
+// 不论走 reflink 还是全量拷贝，留存的内容都必须一致。
+func TestVersionContentIdenticalRegardlessOfCloneSupport(t *testing.T) {
+	policy := DefaultProtectionPolicy()
+	policy.VersionDebounce = 0
+	root, data := newStateRoot(t, policy)
+	_ = root
+
+	backend := newSecureBackend()
+	handle, err := backend.OpenRoot(data)
+	if err != nil {
+		t.Fatalf("打开根: %v", err)
+	}
+	defer handle.Close()
+
+	p, err := newBoundProtection(handle, policy)
+	if err != nil {
+		t.Fatalf("建保护链: %v", err)
+	}
+
+	payload := make([]byte, 300000) // 跨越单个读块，且足够大到能看出拷贝代价
+	for i := range payload {
+		payload[i] = byte(i % 253)
+	}
+	if err := os.WriteFile(filepath.Join(data, "big.bin"), payload, 0o644); err != nil {
+		t.Fatalf("写文件: %v", err)
+	}
+
+	entry, err := p.CaptureVersion("alice", "big.bin")
+	if err != nil {
+		t.Fatalf("取版本: %v", err)
+	}
+	if entry == nil {
+		t.Fatal("未产生版本")
+	}
+
+	stored, err := p.ReadVersion(entry.StoredName)
+	if err != nil {
+		t.Fatalf("读版本: %v", err)
+	}
+	if !bytes.Equal(stored, payload) {
+		t.Errorf("留存内容与原文件不一致（clone=%v，长度 %d vs %d）",
+			p.CloneSupported(), len(stored), len(payload))
 	}
 }

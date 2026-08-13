@@ -52,6 +52,11 @@ type boundProtection struct {
 	mu          sync.Mutex
 	lastVersion map[string]time.Time
 	seq         uint64
+
+	// cloneSupported records whether this filesystem can share extents.
+	// Probed once at init rather than inferred from the filesystem name, since
+	// what matters is whether the ioctl actually works here.
+	cloneSupported bool
 }
 
 // newBoundProtection prepares the state area under a grant root.
@@ -64,12 +69,46 @@ func newBoundProtection(root RootHandle, policy ProtectionPolicy) (*boundProtect
 			return nil, fmt.Errorf("toolfs: cannot prepare state area: %w", err)
 		}
 	}
-	return &boundProtection{
+	p := &boundProtection{
 		root:        root,
 		policy:      policy,
 		lastVersion: make(map[string]time.Time),
-	}, nil
+	}
+	p.cloneSupported = p.probeClone()
+
+	// With copy-on-write cloning, preserving a version costs neither time nor
+	// space proportional to the file. The size ceiling exists purely to bound
+	// the cost of full copies, so it does not apply here — which is the point
+	// of probing: large files become protectable instead of being skipped.
+	if p.cloneSupported {
+		p.policy.MaxVersionFileSize = 0
+	}
+	return p, nil
 }
+
+// probeClone determines whether extent sharing works, by trying it on a tiny
+// file inside the state area.
+//
+// Probing beats inferring from the filesystem type: reflink depends on how the
+// volume was made and mounted, not only on which filesystem it is.
+func (p *boundProtection) probeClone() bool {
+	const src = toolfsStateDir + "/.clone-probe"
+	const dst = toolfsStateDir + "/.clone-probe-copy"
+
+	defer func() {
+		_ = p.root.Remove(src)
+		_ = p.root.Remove(dst)
+	}()
+
+	if err := p.root.WriteFile(src, []byte{0}, 0o600); err != nil {
+		return false
+	}
+	_ = p.root.Remove(dst)
+	return p.root.CloneFile(src, dst, 0o600) == nil
+}
+
+// CloneSupported reports whether versions are stored by extent sharing.
+func (p *boundProtection) CloneSupported() bool { return p.cloneSupported }
 
 // isReserved reports whether a grant-relative path lies in the state area.
 // Reserved paths must never be visible in the namespace nor operated on.
@@ -204,15 +243,21 @@ func (p *boundProtection) captureVersion(username, rel string, force bool) (*Ver
 		return nil, nil
 	}
 
-	content, err := p.root.ReadFile(rel)
-	if err != nil {
-		return nil, err
-	}
-
 	id := p.nextID()
 	stored := stateVersionsDir + "/" + id
-	if err := p.root.WriteFile(stored, content, 0o600); err != nil {
-		return nil, err
+
+	// Prefer extent sharing; fall back to a full copy where it is unavailable.
+	if err := p.root.CloneFile(rel, stored, 0o600); err != nil {
+		if !errors.Is(err, ErrCloneUnsupported) {
+			return nil, err
+		}
+		content, readErr := p.root.ReadFile(rel)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if writeErr := p.root.WriteFile(stored, content, 0o600); writeErr != nil {
+			return nil, writeErr
+		}
 	}
 
 	entry := &VersionEntry{
