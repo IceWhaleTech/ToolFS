@@ -58,6 +58,16 @@ type MountConfig struct {
 	// Enabling it is only safe once revocation is event-driven, so that a
 	// permission change can actively invalidate rather than wait for a TTL.
 	CacheTimeout time.Duration
+
+	// ZeroCopyRead hands the kernel the backing descriptor so it can splice
+	// straight into the reply, skipping the bounce through user space.
+	//
+	// Off by default: measured on a memory-backed store it is *slower* than a
+	// plain copy, because the data is already in the page cache and splice only
+	// adds bookkeeping. It is expected to pay off on real disks, where the copy
+	// it removes is the expensive one — but that has not been established here,
+	// so it stays opt-in.
+	ZeroCopyRead bool
 }
 
 // mountHandle is the concrete MountHandle.
@@ -120,6 +130,7 @@ func MountForIdentity(
 // still reach the same mount path.
 func mountView(mountPoint string, view *InstanceView, config MountConfig) (MountHandle, error) {
 	view.CacheTimeout = config.CacheTimeout
+	view.ZeroCopyRead = config.ZeroCopyRead
 	root := &instanceRoot{view: view}
 
 	ttl := config.CacheTimeout
@@ -128,6 +139,15 @@ func mountView(mountPoint string, view *InstanceView, config MountConfig) (Mount
 		AttrTimeout:     &ttl,
 		NegativeTimeout: &ttl,
 	}
+	// go-fuse defaults MaxWrite to 64 KiB, which costs a round trip every
+	// 64 KiB of sequential IO. Raising it to 1 MiB — the modern kernel's
+	// FUSE_MAX_PAGES ceiling — cuts that by 16x. MaxReadAhead lets the kernel
+	// fetch ahead in equally large chunks, and MaxBackground raises how many
+	// requests may be in flight at once.
+	opts.MountOptions.MaxWrite = 1 << 20
+	opts.MountOptions.MaxReadAhead = 1 << 20
+	opts.MountOptions.MaxBackground = 64
+
 	opts.MountOptions.Name = "toolfs"
 	opts.MountOptions.FsName = "toolfs-" + view.Identity.Username
 	opts.MountOptions.AllowOther = config.AllowOther
@@ -343,9 +363,9 @@ func (f *instanceFile) Open(ctx context.Context, flags uint32) (gofs.FileHandle,
 	// cache hit that would survive a revoked grant. With caching deliberately
 	// enabled, that protection moves to event-driven invalidation instead.
 	if f.view.CacheTimeout > 0 {
-		return &instanceFileHandle{file: file}, fuse.FOPEN_KEEP_CACHE, 0
+		return &instanceFileHandle{file: file, zeroCopy: f.view.ZeroCopyRead}, fuse.FOPEN_KEEP_CACHE, 0
 	}
-	return &instanceFileHandle{file: file}, fuse.FOPEN_DIRECT_IO, 0
+	return &instanceFileHandle{file: file, zeroCopy: f.view.ZeroCopyRead}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // instanceFileHandle streams from the backing file.
@@ -353,7 +373,8 @@ func (f *instanceFile) Open(ctx context.Context, flags uint32) (gofs.FileHandle,
 // It holds a descriptor rather than the file's content: buffering would put the
 // whole file in memory on every open.
 type instanceFileHandle struct {
-	file ReadableFile
+	file     ReadableFile
+	zeroCopy bool
 	// data serves generated content (the control view), which is small and has
 	// no backing descriptor.
 	data []byte
@@ -385,8 +406,15 @@ func (h *instanceFileHandle) Read(ctx context.Context, dest []byte, off int64) (
 		return fuse.ReadResultData(nil), 0
 	}
 
-	// Streaming case: read straight into the reply buffer.
 	if h.file != nil {
+		// Zero copy where possible: hand the kernel our descriptor and let it
+		// splice straight from the backing file into the reply, skipping the
+		// bounce through user space entirely.
+		if h.zeroCopy {
+			if provider, ok := h.file.(interface{ Fd() uintptr }); ok {
+				return fuse.ReadResultFd(provider.Fd(), off, len(dest)), 0
+			}
+		}
 		read, err := h.file.ReadAt(dest, off)
 		if err != nil && read == 0 && !errors.Is(err, io.EOF) {
 			return nil, errnoFor(err)

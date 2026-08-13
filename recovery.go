@@ -155,9 +155,8 @@ func (p *boundProtection) recordChange(change ProtectedChange) error {
 	p.mu.Unlock()
 	change.At = time.Now()
 
-	if err := p.root.MkdirAll(stateJournalDir, 0o700); err != nil {
-		return err
-	}
+	// The journal directory is created once at init; doing it per record cost
+	// an extra stat on every single mutation.
 	data, err := json.Marshal(change)
 	if err != nil {
 		return err

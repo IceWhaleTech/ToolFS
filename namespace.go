@@ -18,6 +18,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -62,11 +64,26 @@ type InstanceView struct {
 	// decide whether to ask the kernel to cache.
 	CacheTimeout time.Duration
 
+	// ZeroCopyRead mirrors MountConfig.ZeroCopyRead.
+	ZeroCopyRead bool
+
 	// SessionID and TaskID are agent-side labels stamped onto journal entries
 	// so an undo can select "everything that task did". They are supplied by
 	// the caller and are unrelated to the per-user mount granularity.
 	SessionID string
 	TaskID    string
+
+	// decisions memoizes the permitted operation set per (entry, relative path).
+	//
+	// Every FUSE operation asks the same question, and answering it costs a
+	// path join, alias normalization and a trie walk — several allocations on
+	// a path that gets walked once per LOOKUP, OPEN and READ. The view is
+	// immutable for one authorization generation, so memoizing is safe: a
+	// permission change produces a new view and discards this cache with it.
+	decisions sync.Map
+	// decisionCount bounds the table. Past the cap new entries are simply not
+	// stored — a bound without the complexity of eviction.
+	decisionCount atomic.Int64
 
 	// entries is keyed by VirtualName.
 	entries map[string]*NamespaceEntry
@@ -210,13 +227,59 @@ func (v *InstanceView) Resolve(relPath string) (*NamespaceEntry, string, error) 
 // disclosed to an unauthorized caller.
 var ErrNotAuthorized = errors.New("toolfs: path is not within any grant")
 
+// maxCachedDecisions bounds the memoization table.
+const maxCachedDecisions = 50000
+
 // Allows checks an operation against a resolved entry and the current caps.
 func (v *InstanceView) Allows(entry *NamespaceEntry, rel string, op AccessOp) bool {
 	if v == nil || entry == nil {
 		return false
 	}
+	return v.allowedOps(entry, rel)&op == op
+}
+
+// cachedDecision carries the generation the answer was computed under, so a
+// changed authorization cannot be served from a stale entry.
+type cachedDecision struct {
+	generation uint64
+	ops        AccessOp
+}
+
+// allowedOps returns the permitted operation set, memoized per path.
+//
+// The memo self-invalidates on generation change rather than relying on the
+// view being replaced wholesale. Views normally are replaced, but an in-place
+// swap of Access would otherwise silently keep serving the old answers — which
+// for a revoked grant means continuing to allow access.
+func (v *InstanceView) allowedOps(entry *NamespaceEntry, rel string) AccessOp {
+	generation := uint64(0)
+	if v.Access != nil {
+		generation = v.Access.Generation
+	}
+
+	key := entry.VirtualName + "\x00" + rel
+	if cached, ok := v.decisions.Load(key); ok {
+		if decision := cached.(cachedDecision); decision.generation == generation {
+			return decision.ops
+		}
+	}
+
+	allowed := v.computeAllowedOps(entry, rel)
+	decision := cachedDecision{generation: generation, ops: allowed}
+	if _, loaded := v.decisions.Swap(key, decision); !loaded {
+		if v.decisionCount.Add(1) > maxCachedDecisions {
+			// Past the cap, stop growing: drop what we just added rather than
+			// evicting, which keeps the bound without eviction machinery.
+			v.decisions.Delete(key)
+			v.decisionCount.Add(-1)
+		}
+	}
+	return allowed
+}
+
+func (v *InstanceView) computeAllowedOps(entry *NamespaceEntry, rel string) AccessOp {
 	if v.isDenied(rel) {
-		return false
+		return 0
 	}
 	hostPath := entry.HostPath
 	if rel != "" {
@@ -224,7 +287,7 @@ func (v *InstanceView) Allows(entry *NamespaceEntry, rel string, op AccessOp) bo
 	}
 	// Re-check against the authorization snapshot rather than trusting the
 	// entry alone, so nested narrowing grants (parent rw, child ro) apply.
-	return v.Access.Allows(hostPath, op, v.Caps)
+	return v.Access.AllowedOps(hostPath, v.Caps)
 }
 
 // isDenied applies DenyPatterns against the grant-relative path.

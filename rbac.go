@@ -149,6 +149,24 @@ func (s *AccessSnapshot) Allows(hostPath string, op AccessOp, caps AgentCapabili
 	return grantAllows(grant, op, caps)
 }
 
+// AllowedOps returns the full operation set permitted on hostPath, after
+// capability narrowing. Returning the whole set rather than answering one
+// question lets callers memoize a single lookup.
+func (s *AccessSnapshot) AllowedOps(hostPath string, caps AgentCapabilities) AccessOp {
+	if s == nil {
+		return 0
+	}
+	grant, ok := s.Lookup(hostPath)
+	if !ok {
+		return 0
+	}
+	allowed := grant.Ops()
+	if caps.AllowDelete && !grant.ReadOnly {
+		allowed |= OpDelete
+	}
+	return allowed
+}
+
 // Lookup returns the longest-prefix grant covering hostPath.
 func (s *AccessSnapshot) Lookup(hostPath string) (Grant, bool) {
 	if s == nil || s.matcher == nil {

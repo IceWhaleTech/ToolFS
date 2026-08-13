@@ -59,7 +59,7 @@ func newBoundProtection(root RootHandle, policy ProtectionPolicy) (*boundProtect
 	if policy.ExcludePatterns == nil {
 		policy.ExcludePatterns = DefaultExclusions
 	}
-	for _, dir := range []string{stateTrashDir, stateVersionsDir, stateMetaDir} {
+	for _, dir := range []string{stateTrashDir, stateVersionsDir, stateMetaDir, stateJournalDir} {
 		if err := root.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("toolfs: cannot prepare state area: %w", err)
 		}
