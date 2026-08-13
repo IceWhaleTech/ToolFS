@@ -1,5 +1,9 @@
 # ToolFS 技术方案：基于 ZimaOS 用户授权的多用户挂载文件系统（RBAC/ACL）
 
+> ⚠️ **本稿部分前提已被业务需求 v0.3（2026-08-07）推翻**，最重要的一条是「agent 与 ZimaOS
+> 是两套独立账号体系」——现已确认为**同一套账号体系**。受影响章节已就地标注，
+> 权限模型的最新形态见 [`rbac-v1-alignment.md`](rbac-v1-alignment.md)。
+>
 > 状态：设计稿阶段（v7，最新一版；未评审、未确认，不作为实施依据）
 > 日期：2026-07-30（v7，含宿主编排与挂载结构修订）
 > 关联系统：[IceWhale-Files](https://github.com/IceWhaleTech/IceWhale-Files)（**权限事实来源**）、[ZimaOS-UserService](https://github.com/IceWhaleTech/ZimaOS-UserService)（JWT 签发）、ZimaOS-LocalStorage（`/DATA` 挂载）
@@ -127,6 +131,11 @@ ZimaOS 自身在 admin 语义上是分裂的（SMB 查表 / Web UI 特权放行�
 - **特权旁路换来的唯一额外能力是「share 行被删光时仍能访问」**——这恰恰是不应该要的行为；
 - 少一条绕过全部检查的代码路径，root daemon 的爆炸半径显著变小。
 
+> **业务需求 v0.3 反过来印证了这个决策。** 它要求「Owner 默认全量访问，**显式隐藏的空间除外**」——
+> 而 `if role=="admin" return true` 这种特权放行**根本无法表达「除外」**。只要 Owner 短路返回，
+> 「对 Owner 隐藏」就做不到。因此 IceWhale-Files 的 admin 放行必须移除
+> （[`rbac-v1-alignment.md`](rbac-v1-alignment.md) §3.1）。
+
 `PublicRoots` 因此退化为**纯粹的硬上界**（任何 Grant、StateRoot、恢复路径都不得越过），而不再是 admin 的可访问集合。
 
 > `role` 字段在 v5 中仍有用，但只用于**管理操作的准入**（`PurgeTrash`、`CreateSnapshot`、`RollbackVolume`），不参与任何文件路径的可见性与读写判定。
@@ -245,7 +254,7 @@ Docker 28.3.2，dockerd 以 `MountFlags=shared` 运行且与宿主同 mount name
 | 实例通信 | **unix socket**（`--listen unix://PATH`）——app-server 拒绝无鉴权的非 loopback TCP 监听，socket 经 bind mount 暴露给 Web 服务（§14.10.8） |
 | toolfsd 进程模型 | **单进程 serve 全部挂载**——版本去抖与计数需跨挂载互斥，进程内 mutex 最可靠；崩溃可由 systemd 拉起并重挂（§6.5） |
 | 集成方式 | **改 `WEB_STREAMING_BUSINESS_ROOT` 指向挂载点**，codex 侧零改动 |
-| 账号绑定 | agent 与 ZimaOS **两套独立账号体系**，请求不带 ZimaOS token；须经用户自助绑定或管理员映射（§14.6）。ToolFS 侧以 `IdentityResolver` 抽象隔离，**不阻塞开工** |
+| 账号绑定 | ~~两套独立账号体系，须显式绑定~~ → **已被业务需求 v0.3 推翻：agent 与 ZimaOS 是同一套账号体系**，身份直接来自会话，不再需要绑定流程。`IdentityResolver` 保留但退化为「从会话取身份」（§14.6 已作废） |
 | 排除规则 | **必备项**：`.git/`、`node_modules/` 等不存版本（但删除仍进回收站），否则一次 `npm install` 即打满仅剩 31G 的 `/DATA` |
 | 恢复能力 | **三层恢复源统一为一条时间线**：versions（覆盖前旧内容）/ trash（删除）/ snapshot（整卷时间点） |
 | agent 核心能力 | **会话/任务级撤销**（§7.8）——建立在 versions+trash 之上，不依赖 btrfs，在 ext4 主存储上同样可用 |
@@ -254,7 +263,7 @@ Docker 28.3.2，dockerd 以 `MountFlags=shared` 运行且与宿主同 mount name
 | 保护能力的粒度 | **按存储而异，不是全局能力**（§2.5①）。实测主存储 `/DATA` 是 ext4 → 只有 versions + trash；btrfs 数据盘才有快照 |
 | 跨文件系统的架构 | **分层：语义统一 + 能力显式 + 实现适配**（§7.2.1）。统一的是「恢复点」抽象，不是「快照」实现；能力挂在 per-device `StateRoot` 上并**驱动策略**，不只用于展示 |
 | 消费形态 | Go 库 + FUSE（**每用户一个挂载点**；同一用户的多个 agent 会话共享之。仅当需要不同 capabilities 的并行实例时才追加实例 ID） |
-| 身份来源 | **不经 JWT 验签**——agent 与 ZimaOS 账号体系独立，请求不携带 ZimaOS token；改由 `IdentityResolver` 解析绑定关系（§14.6） |
+| 身份来源 | **同一套账号体系**，身份随会话而来；`IdentityResolver` 退化为直取，不再解析绑定关系 |
 | FUSE 缓存 | 授权敏感挂载默认禁用内容缓存；Grant 变更主动失效 inode/dentry |
 | 生产平台 | Linux 为安全基线；macOS 仅开发验证，使用逐段 `openat` fallback |
 
@@ -482,7 +491,11 @@ Z-Skip-Auth: true
 
 ### 5.2 缓存与失效
 
-ZimaOS 没有 share 变更事件（MessageBus 只有 `samba:create-user-end` / `samba:delete-user-end`）。策略：
+> **业务需求 v0.3 要求「授权即时生效」，且口径确认为事件驱动的真正即时。**
+> 以下 TTL 轮询**满足不了**该要求，需上游补充授权变更事件（§10 #14）；届时 TTL
+> 退居为事件丢失时的兜底。ToolFS 侧的连带改造（视图热替换）见 §6.2。
+
+ZimaOS 没有 share 变更事件（MessageBus 只有 `samba:create-user-end` / `samba:delete-user-end`）。现行策略：
 
 - 不可变 snapshot TTL 默认 30s；
 - 订阅上述两个用户事件立即失效；
@@ -544,13 +557,28 @@ type InstanceView struct {
   ```
 
 - 若同一用户需要不同 capabilities 的并行实例，可在 workspace 层追加实例 ID（`<user-id>/<instance-id>/`），但**默认不必**——capabilities 是按用户配置的；
-- mount path 不直接使用未经校验的 username；目录名使用数字 user ID 与不可预测的实例 ID。
+- mount path 不直接使用未经校验的 username；目录名使用数字 user ID 与不可预测的实例 ID；
+- **私人空间**（业务需求 v0.3）建模为一条自动创建的授权行，与其他条目同等对待——
+  它默认只对本人授权，可显式共享给他人。ToolFS 侧**无需特殊分支**：私有还是共享，
+  完全由授权行本身表达。「对 Owner 隐藏」同理，就是不给 Owner 写那条授权行。
 
 当前根节点固定暴露 `memory`、`rag` 和 skill mounts，它们没有 ZimaOS share 授权来源。核心 RBAC FUSE MVP **不暴露这些虚拟后端**；后续如需合入，统一放到 `/tools` 并使用独立 `ToolCapabilities`，不能因用户拥有某个文件 Grant 就自动开放。
 
 **唯一例外是 `.toolfs/`**——per-instance 的**只读控制视图**（§14.9）。它不来自 Grant，但也不泄露 Grant 之外的任何数据：内容仅为当前实例自身的恢复点、变更记录与回收站条目，且逐条目按**当前** Grant 过滤。它与 `.toolfs-state` 同属**全局 reserved name**：真实数据中出现同名目录时以虚拟视图优先并记录告警，禁止用户数据遮蔽控制视图。
 
 ### 6.2 MountHandle 与生命周期
+
+> **待补的架构缺口：`InstanceView` 目前无法在不重挂的情况下更新。**
+>
+> 它是挂载时构建的不可变对象，FUSE 根节点持有其**固定指针**。授权一旦变化，
+> 命名空间不会跟着变——必须重挂才能生效。这与业务需求「即时生效」直接冲突。
+>
+> 改法：根节点改为持有可原子替换的引用（`atomic.Pointer[InstanceView]`，
+> §5.2 的 `snapshotHolder` 已有同类实现可参照），收到授权变更事件后重建视图并替换。
+>
+> **好消息**：FUSE 侧的内核缓存已全部禁用（entry/attr/negative TTL 均为 0，内容走
+> direct IO，见 §6.4），因此**快照一换读路径立即生效**，不需要额外的
+> `NotifyEntry`/`NotifyContent`。这是当初为「撤权不泄露陈旧数据」做的决定，此处顺带受益。
 
 ```go
 type NamespaceMode uint8
@@ -1259,7 +1287,12 @@ change log 的保留策略与 `versions`/`trash` 联动：**凭据指向的恢�
 
 ## 8. ZimaOS 凭据的获取与维护
 
-> **适用范围（v7 修订）**：本章原设定为「每个请求验签 JWT 获取身份」。因 agent 与 ZimaOS 账号体系独立（§14.6.1），**该模型不成立**——请求中不携带 ZimaOS token。
+> **适用范围（v0.3 再修订）**：账号体系已确认为**同一套**，身份随会话而来。本章原先讨论的
+> 「如何获取并维护绑定后的 ZimaOS 凭据」**不再需要**；若上层仍以 JWT 承载会话身份，
+> 则本章的验签细节（JWKS、无 `kid`、alg 混淆防护）依然适用，但它属于**上层会话鉴权**，
+> 不是 ToolFS 的职责。以下内容按此范围阅读。
+>
+> ~~原 v7 修订说明：本章原设定为「每个请求验签 JWT 获取身份」。因 agent 与 ZimaOS 账号体系独立（§14.6.1），**该模型不成立**~~——请求中不携带 ZimaOS token。
 >
 > 本章内容改为适用于**账号绑定流程**：当采用 §14.6.3 的方案 A 或 B 时，需要获取并维护该 ZimaOS 用户的凭据（用于代表其拉取 Grant、以及凭据续期）。下述关于无 `kid` 的 JWKS、过期与续期、失效降级策略的分析**仍然适用于那个场景**。
 >
@@ -1358,8 +1391,12 @@ func NewFileAuditLogger(dir string) (*FileAuditLogger, error) // JSONL，按日�
 | 4 | IceWhale-Files 提供修复后的逐用户 Grant 接口；现有 `/share` 不作为授权输入 | ⚠️ **联调阻塞项** |
 | 5 | IceWhale-Files public-path 规则可复用或固化为版本化 `PublicRootProvider` 契约 | ⚠️ **安全阻塞项** |
 | 6 | IceWhale-Files 服务运行，`/run/casaos/icewhale-files.url` 在**宿主**可达 | 依赖 |
-| 7 | **agent 账号 → ZimaOS 授权主体的绑定方式**（§14.6）。**注意：不能靠请求携带 ZimaOS token，两套账号体系独立** | ⚠️ **集成阻塞项**（因 `IdentityResolver` 抽象，不阻塞开工） |
-| 8 | 若绑定采用方案 A/B，需明确 ZimaOS 凭据的续期主体（§8） | ❓ **待确认** |
+| 7 | ~~agent 账号 → ZimaOS 授权主体的绑定方式~~ → **已消除**：业务需求 v0.3 确认为同一套账号体系 | ✅ 不再是阻塞项 |
+| 8 | ~~绑定后的 ZimaOS 凭据续期主体~~ → **已消除**，同上 | ✅ 不再是阻塞项 |
+| 12 | **授权模型扩展为读/写/删三标志** —— 现有 share 表只有 `read_only`，表达不了「可写不可删」（对齐说明 §3.2） | ⚠️ **模型阻塞项**（上游） |
+| 13 | **授权主体键支持 Agent** —— 现为 `samba_user`（Linux 用户名），而 Agent 不是 Linux 用户（对齐说明 §3.3） | ⚠️ **模型阻塞项**（上游） |
+| 14 | **发布授权变更事件** —— 业务要求「事件驱动的真正即时生效」，而 MessageBus 现无 share 变更事件（对齐说明 §3.4） | ⚠️ **新增阻塞项**（上游） |
+| 15 | **移除 `CheckPermission` 的 admin 放行** —— 否则无法表达「对 Owner 隐藏」（对齐说明 §3.1） | ⚠️ **语义阻塞项**（上游） |
 | 9 | 每个 backing device 可创建 reserved StateRoot，并同步配置 Files/Samba 排除 | ⚠️ **受保护写入阻塞项** |
 | 10 | ~~真机确认 `/DATA` 是否为 btrfs subvolume~~ → **已确认为 ext4**，快照能力在主存储不可用（§2.5①）。需产品确认可接受 | ✅ 已查明 → ❓ **产品决策** |
 | 11 | `.toolfs-state` 独立 subvolume → btrfs 数据盘已验证可行；ext4 上退化为普通目录 | ✅ 已查明 |
@@ -1599,7 +1636,11 @@ appServer.request("thread/start", {
 1. **app-server 内嵌 codex core**（`app-server/src/in_process.rs`），thread 是**进程内对象**而非子进程——因此没有可被 `toolfs run` 包装的 per-task 进程边界。
 2. **实际执行身份是 `seluser`，非 root**。实测 `CapEff: 0000000000000000`、`mount` 被拒、块设备读取 `Permission denied`。容器虽为 privileged，但该配置**未传导到 agent 进程**。
 3. **codex 的沙箱策略是 `externalSandbox`**（`WEB_STREAMING_EXTERNAL_SANDBOX`）——它明确把沙箱责任委托给外部，自身不做 Landlock。这与 ZimaOS 内核未编译 Landlock 恰好相容，也正是 ToolFS 应当填入的位置。
-4. **agent 与 ZimaOS 是两套完全独立的账号体系**（§14.6.1）。agent web 有自己的登录，请求中**不携带 ZimaOS token**；`DEFAULT_USER_ID = process.env.WEB_STREAMING_USER_ID ?? "local-user"`，与 `casaos`/`subuser` 无任何映射。**接入 ZimaOS 网关也不解决此问题**——网关（Caddy）仅做反向代理，鉴权由各应用自行实现。
+4. **codex 现状：账号与 ZimaOS 无映射**。`DEFAULT_USER_ID = process.env.WEB_STREAMING_USER_ID ?? "local-user"`，与 `casaos`/`subuser` 无任何对应；agent web 有自己的登录，请求不携带 ZimaOS token。网关（Caddy）仅做反向代理、不鉴权，因此接入网关也不会自动带来身份。
+
+   > **该观察仍然成立，但由此得出的设计前提已被推翻。** 当时据此认定「两套账号体系永久独立、必须做绑定」，而业务需求 v0.3 确认 Zima Agent 与 ZimaOS 应为**同一套账号体系**。
+   >
+   > 也就是说：这不再是一条需要绕开的**约束**，而是一项需要补上的**改造**——codex 侧要改为消费 ZimaOS 身份，而不是自造 `local-user`。
 
 5. **agent 具备无头浏览器能力**：Chromium + chromedriver 已装，按需启动，由 `openrt`（独立进程，监听 9731）管理，经 `open_browser_instance` / `close_browser_instance` 两个动态工具暴露给 agent。**每 thread 一个实例，profile 与登录态持久化**。镜像本身是 Selenium Node 底子（`seluser`、4442/4443/4444 端口、`SE_*` 变量、`/opt/selenium/selenium-server.jar`）。资源实测见 §14.10。
 
@@ -1794,9 +1835,22 @@ export let appServer: AppServerRpcClient;       // 现状：模块级单例
 
 **多实例是三者中唯一无明显短板者。** 若账号绑定短期无法确定，可先按「包装现有单实例」落地（entrypoint 改一行，即得完整误删保护），代码中预留实例池抽象——两者的 toolfsd 侧逻辑一致，仅从「固定身份」变为「按 userId 动态建实例」。
 
-### 14.6 账号绑定（前置条件）
+### 14.6 ~~账号绑定（前置条件）~~ —— 已作废
 
-#### 14.6.1 不可再漂移的前提
+> 本章整体基于「agent 与 ZimaOS 是两套独立账号体系」，该前提已被业务需求 v0.3 推翻。
+> 账号体系统一后，身份直接来自会话，**不存在绑定问题**，本章的三条路线均无意义。
+> 保留全文仅为追溯。
+
+#### 14.6.1 ~~不可再漂移的前提~~ → **该前提已被推翻**
+
+> **业务需求 v0.3（2026-08-07）确认：Zima Agent 与 ZimaOS 是同一套账号体系。**
+> 本节以下内容基于「两套独立账号体系」这一**已不成立**的前提，**保留仅为追溯判断变更的过程**，
+> 不再作为设计依据。
+>
+> 连带失效：§14.6 的三条绑定路线（A/B/C）、§10 前置条件 #7/#8、§8 的凭据续期主体。
+> 现行模型见 [`rbac-v1-alignment.md`](rbac-v1-alignment.md)。
+
+原文如下（已作废）：
 
 > **Zima Agent 与 ZimaOS 是两套完全独立的账号体系。**
 >
@@ -2250,7 +2304,26 @@ Linux 真机全量 PASS。
 > 加控制视图时把 `.toolfs` 计入了根目录集合断言，就是只有 Linux 真机才暴露的。
 > 涉及 FUSE 行为的改动必须在 Linux 上复验。
 
-### 15.7 尚未实现的设计内容
+### 15.7 业务需求 v0.3 对已落地代码的影响
+
+2026-08-07 的业务收敛确立了平台级权限模型（详见 [`rbac-v1-alignment.md`](rbac-v1-alignment.md)）。
+对已落地的 P0–P4 影响如下：
+
+| 已落地部分 | 影响 |
+|---|---|
+| P0 安全地基 | **无影响** |
+| P2 挂载视图、P3 保护链、P4 恢复、控制视图 | **无影响** —— 保护与恢复语义与授权模型正交 |
+| `IdentityResolver` | 接口保留，实现**退化**为「从会话直取身份」。绑定表与 fallback 过渡模式不再需要。<br>**这个抽象证明是对的**：前提被推翻，但接口没变、内部没动 |
+| `Grant{ReadOnly bool}` | **需改**为读/写/删三标志（依赖上游先扩展，§10 #12） |
+| `AgentCapabilities` | **需加** `AllowedPaths` 路径子集收窄 |
+| `PermissionProvider` TTL 缓存 | **需改**为事件驱动（依赖上游事件，§10 #14） |
+| `InstanceView` 不可变 + 根节点固定指针 | **需改**为可原子替换（§6.2） |
+
+值得记录的一点：被推翻的是「两套独立账号体系」这条我曾标为**不可再漂移**的前提。
+它连续两次被强调、被我写进 §14.6.1 作为约束，最终仍然变了。**前提会变，抽象层是
+唯一的保险** —— `IdentityResolver` 与 `PermissionProvider` 这两个接口挡住了全部冲击。
+
+### 15.8 尚未实现的设计内容
 
 以下在前文有设计、但代码里还没有：
 
