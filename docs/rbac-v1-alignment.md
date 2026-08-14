@@ -8,6 +8,24 @@
 
 ---
 
+## 0. 实现后的变化（2026-08-14）
+
+授权已在 UserService 落地，实现过程推翻了本文若干处判断。**下文各节保留原样**，因为它们记录了一次真实的判断变更；本节是与实现不一致处的清单。权威说明见 UserService 仓库的 [`docs/rbac-design.md`](../../ZimaOS-UserService/docs/rbac-design.md)。
+
+**授权存储不再在 IceWhale-Files。** 权威源是 UserService 的关系元组表；`shares_model_dbs` 降级为 UserService 写出的投射，SMB 配置生成不变。上文「IceWhale-Files（授权存储与路径语义）」应读作「IceWhale-Files（SMB 投射与路径语义）」。
+
+**删除维度不再只对 Agent。** `path` 命名空间对所有主体有 `read` / `write` / `delete` 三个关系。但**投射到 SMB 是有损的**：一条共享行每个用户只有一个 `read_only` 标志，且本设备 Samba 跑在 `nt acl support = no` 下，第三档既存不下也执行不了。所以 delete 只在 HTTP 与 ToolFS 通路上生效，经 SMB 访问的人受读/写约束。§1 里「与 Samba 能表达的一致」的收敛动机仍然正确，但结论从「用户侧不设删除」改成了「删除存在，但 SMB 通路上表达不出来，必须在提供该权限的地方写明」。
+
+**应用可见性不再是「展示层」。** 它是 `app` 命名空间的一等关系，与 `visible` / `launch` / `manage` / `uninstall` 构成蕴含链。它与数据授权仍然正交——这一点没变。
+
+**新增 `system` 轴**：terminal / settings / network / app.install。业务需求 v0.3 里没有它，是后续补充的要求。
+
+**模型换成了 Zanzibar 关系元组**，而不是本文假设的「主体 × 路径 × 操作」平表。原因是需要组与任意间接层（组、目录继承、应用代用户代理、跨设备共享）。快照 + generation 订阅的契约形态未变，正是本文 §1 就确定的那一套。
+
+**仍未解决**：IceWhale-Files `CheckPermission` 的 admin 放行（本文 §3.1 要求移除）。摘掉它需要先决定 Owner 默认持有哪些根目录——管理员目前不持有任何 share 行，提前移除会把他们锁在门外。
+
+---
+
 ## 1. 统一权限模型
 
 ```
