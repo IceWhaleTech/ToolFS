@@ -38,8 +38,10 @@ Zima Agent（基于 Codex 二开）直接操作用户文件，存在两类风险
 
 ### 3.1 ZimaOS 的文件权限在哪里
 
-- 唯一事实来源是 IceWhale-Files 的一张 SQLite 表，每行表达「某用户对某路径前缀有只读 / 读写权限」。
-- **UserService 里没有权限数据**，它的权限接口只是转发给 IceWhale-Files 的代理。
+> **前两条已于 2026-08-14 被授权改造推翻。** 权威源移到了 UserService 的关系元组表，IceWhale-Files 的那张表降级为投射，代理已拆除。当前状态见 [`rbac-v1-alignment.md`](rbac-v1-alignment.md) §0。
+
+- ~~唯一事实来源是 IceWhale-Files 的一张 SQLite 表~~，每行表达「某用户对某路径前缀有只读 / 读写权限」。
+- ~~**UserService 里没有权限数据**，它的权限接口只是转发给 IceWhale-Files 的代理。~~
 - **POSIX 文件权限完全不参与**：所有文件为 `root:root 0777`，SMB 侧配置为强制 root 身份。隔离 100% 依赖那张表。
 - 新用户默认权限为零，必须管理员显式授权。
 - **不存在 per-user home 目录**，所有用户共用一棵目录树。

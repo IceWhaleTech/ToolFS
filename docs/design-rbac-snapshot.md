@@ -75,6 +75,8 @@ ZimaOS 当前模型实质上是：
 
 ### 2.1 唯一事实来源
 
+> **2026-08-14 已迁移。** 权威源现在是 UserService 的 `permission_tuples`；下面这张表降级为它写出的投射，SMB 配置生成不变。本节保留的是迁移前的调查结果，也是投射今天仍然长成这样的原因。当前状态见 [对齐说明 §0](rbac-v1-alignment.md) 与 UserService 仓库的 `docs/rbac-design.md`。
+
 ```
 /var/lib/casaos/files.db  →  表 shares_model_dbs
 每行 = (samba_user, path, read_only, is_deleted)
@@ -87,7 +89,7 @@ ZimaOS 当前模型实质上是：
 
 | 事实 | 依据 |
 |---|---|
-| **UserService 里没有权限数据** | 只有 `role` 字段（`admin`/`user`）。`GetUserPermissions`/`UpdateUserPermissions`（`ZimaOS-UserService/service/user.go:664-784`）只是转发给 IceWhale-Files 的 HTTP 代理 |
+| ~~**UserService 里没有权限数据**~~ | ~~只有 `role` 字段（`admin`/`user`）。`GetUserPermissions`/`UpdateUserPermissions` 只是转发给 IceWhale-Files 的 HTTP 代理~~ → **2026-08-14 已推翻**：权限数据全在 UserService 的关系元组表，代理已拆除，`shares_model_dbs` 降级为投射。见对齐说明 §0 |
 | **POSIX 文件权限完全不参与** | `smb.conf` 写死 `force user = root` + `create/directory mask = 0777` + `nt acl support = no` + `inherit permissions = no`；两个仓库均无 `chown`/`setfacl`。所有文件落盘为 `root:root 0777` |
 | **ZimaOS 自身对 admin 的处理是分裂的** | **SMB 是数据驱动**：`service/smb.go` 全文无 `admin`/`role`，配置纯按 share 表逐用户生成，admin 看到的就是他在表里的行。**Web UI 是特权驱动**：`service/shares.go:618` `CheckPermission` 第一行 `if role=="admin" { return true }`，压根不查表。两个视图对 admin 会给出不同答案 |
 | **admin 的 share 行是自动写入的，不是特权换来的** | `samba:create-user-end` 事件 → `service/message.go:139` `StartAllStorageSMBShareWhenSambaUserBeCreate` → 遍历 storage，给 `getUsername()` 取到的第一个用户（= 主用户 = admin）建 **rw** share。**注意仅在 `len(shares)==0` 时创建**，已有 share 的存储不会再自动加 admin |
@@ -134,6 +136,10 @@ ZimaOS 自身在 admin 语义上是分裂的（SMB 查表 / Web UI 特权放行�
 > **业务需求 v0.3 反过来印证了这个决策。** 它要求「Owner 默认全量访问，**显式隐藏的空间除外**」——
 > 而 `if role=="admin" return true` 这种特权放行**根本无法表达「除外」**。只要 Owner 短路返回，
 > 「对 Owner 隐藏」就做不到。因此 IceWhale-Files 的 admin 放行必须移除
+>
+> **2026-08-14：上游已按这个方向落地。** UserService 里 Owner 是 `role:owner#member` 这个主体集合，
+> 授权写在角色上；求值路径上没有任何角色判断。「对 Owner 隐藏」由「具体对象的 deny 压过角色的通配
+> allow」实现，已有测试覆盖。ToolFS 当初选择 SMB 那一侧的判断，现在是全栈唯一的一侧
 > （[`rbac-v1-alignment.md`](rbac-v1-alignment.md) §3.1）。
 
 `PublicRoots` 因此退化为**纯粹的硬上界**（任何 Grant、StateRoot、恢复路径都不得越过），而不再是 admin 的可访问集合。
@@ -1401,10 +1407,10 @@ func NewFileAuditLogger(dir string) (*FileAuditLogger, error) // JSONL，按日�
 | 6 | IceWhale-Files 服务运行，`/run/casaos/icewhale-files.url` 在**宿主**可达 | 依赖 |
 | 7 | ~~agent 账号 → ZimaOS 授权主体的绑定方式~~ → **已消除**：业务需求 v0.3 确认为同一套账号体系 | ✅ 不再是阻塞项 |
 | 8 | ~~绑定后的 ZimaOS 凭据续期主体~~ → **已消除**，同上 | ✅ 不再是阻塞项 |
-| 12 | ~~授权模型扩展为读/写/删三标志~~ → **已取消**：用户只给读/写（与 SMB 一致），删除收敛只对 Agent，现有 `read_only` 即够（对齐说明 §3.5） | ✅ 不再是阻塞项 |
-| 13 | **授权主体键支持 Agent** —— 现为 `samba_user`（Linux 用户名），而 Agent 不是 Linux 用户（对齐说明 §3.3） | ⚠️ **模型阻塞项**（上游） |
-| 14 | **发布授权变更事件** —— 业务要求「事件驱动的真正即时生效」，而 MessageBus 现无 share 变更事件（对齐说明 §3.4） | ⚠️ **新增阻塞项**（上游） |
-| 15 | **移除 `CheckPermission` 的 admin 放行** —— 否则无法表达「对 Owner 隐藏」（对齐说明 §3.1） | ⚠️ **语义阻塞项**（上游） |
+| 12 | ~~授权模型扩展为读/写/删三标志~~ → ~~已取消~~ → **已实现**（2026-08-14）：`path` 命名空间对所有主体有 read/write/delete。「只给读写」的取消理由被推翻了一半——SMB 确实表达不了 delete，但那是**投射有损**，不是模型该收窄。delete 只在 HTTP 与 ToolFS 通路生效 | ✅ 已实现 |
+| 13 | ~~**授权主体键支持 Agent**~~ → **已实现**（2026-08-14）：元组主体是 `user:<id>` / `agent:<id>`，不再是 Linux 用户名；投射到共享表时才映射回用户名 | ✅ 已解决 |
+| 14 | ~~**发布授权变更事件**~~ → **已实现**（2026-08-14）：`GET /v2/permissions/events`（SSE）在每次变更时推送 generation。不走 MessageBus——快照持有方要的是「你手上的过期了」，不是变更内容 | ✅ 已解决 |
+| 15 | **移除 `CheckPermission` 的 admin 放行** —— 否则无法表达「对 Owner 隐藏」（对齐说明 §3.1）。**前置条件已具备**（2026-08-14）：Owner 的授权已作为 `role:owner#member` 的数据存在，含 `/media` 与 `/var/log`，摘掉旁路不再会锁死管理员 | ⚠️ **待上设备验证后移除** |
 | 9 | 每个 backing device 可创建 reserved StateRoot，并同步配置 Files/Samba 排除 | ⚠️ **受保护写入阻塞项** |
 | 10 | ~~真机确认 `/DATA` 是否为 btrfs subvolume~~ → **已确认为 ext4**，快照能力在主存储不可用（§2.5①）。需产品确认可接受 | ✅ 已查明 → ❓ **产品决策** |
 | 11 | `.toolfs-state` 独立 subvolume → btrfs 数据盘已验证可行；ext4 上退化为普通目录 | ✅ 已查明 |

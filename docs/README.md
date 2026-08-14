@@ -135,10 +135,12 @@
 
 ## 5. 贯穿各版本的不变结论
 
-无论方案怎么改，以下事实来自对 ZimaOS 全栈的调查，不随版本变化：
+以下事实来自对 ZimaOS 全栈的调查。
 
-- **ZimaOS 文件权限的唯一事实来源**是 `/var/lib/casaos/files.db` 的 `shares_model_dbs` 表，每行 `(samba_user, path, read_only, is_deleted)`。
-- **UserService 里没有权限数据**，只有 `role` 字段；它的权限 API 只是转发给 IceWhale-Files 的代理。
+> **前两条已于 2026-08-14 被授权改造推翻**，保留是因为它们记录了改造前的状态；当前状态见 [`rbac-v1-alignment.md`](rbac-v1-alignment.md) §0 与 UserService 仓库的 `docs/rbac-design.md`。
+
+- ~~**ZimaOS 文件权限的唯一事实来源**是 `/var/lib/casaos/files.db` 的 `shares_model_dbs` 表~~ → 权威源已移至 UserService 的关系元组表；这张表降级为投射。
+- ~~**UserService 里没有权限数据**，只有 `role` 字段；它的权限 API 只是转发给 IceWhale-Files 的代理~~ → 权限数据现在都在 UserService，代理已拆除。
 - **ZimaOS 对 admin 的处理本身就分裂**：SMB 数据驱动（`smb.go` 全文无 `admin`/`role`），Web UI 特权驱动（`shares.go:618`）。admin 的 share 行由 `message.go:139` 在 samba 用户创建时自动写入——**仅当该存储 `len(shares)==0`**，已有 share 的存储不会再自动加 admin。
 - **POSIX 权限完全不参与**：`force user = root` + `0777` + `nt acl support = no`，全仓库无 `chown`/`setfacl`。
 - **新用户默认权限为零**，必须管理员显式授权。
