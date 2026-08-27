@@ -95,11 +95,13 @@ func (c *controlDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	out.SetEntryTimeout(0)
 	out.SetAttrTimeout(0)
 	out.Mode = syscall.S_IFREG | 0o444
+	stampVirtualTimes(&out.Attr, c.view)
 	return c.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFREG}), 0
 }
 
 func (c *controlDir) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = syscall.S_IFDIR | 0o555
+	stampVirtualTimes(&out.Attr, c.view)
 	out.SetTimeout(0)
 	return 0
 }
@@ -125,6 +127,7 @@ func (f *controlFile) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse
 	}
 	out.Mode = syscall.S_IFREG | 0o444
 	out.Size = uint64(len(content))
+	stampVirtualTimes(&out.Attr, f.view)
 	out.SetTimeout(0)
 	return 0
 }

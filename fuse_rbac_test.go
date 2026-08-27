@@ -15,6 +15,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 // mountTwoUsers mounts alice and bob and returns their mount points.
@@ -174,5 +176,47 @@ func requireFUSE(t *testing.T) {
 	t.Helper()
 	if !FUSEAvailable() {
 		t.Skip("跳过：本机无可用的 FUSE 实现（Linux 需 /dev/fuse，macOS 需 macFUSE）")
+	}
+}
+
+// The backing mtime has to survive the trip through the FUSE layer: every
+// attribute used to report the zero time, and a namespace where everything
+// says 1970 reads as broken to both people and sync tools.
+func TestAttributesCarryTheBackingModTime(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(filePath, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	access := NewAccessSnapshot("alice", 1001, "user", []Grant{{ID: 1, Name: "docs", Path: dir}}, 1)
+	view, err := BuildInstanceView(&ZimaIdentity{Username: "alice", UserID: 1001}, access, AgentCapabilities{})
+	if err != nil {
+		t.Fatalf("BuildInstanceView: %v", err)
+	}
+	if err := view.openRoots(); err != nil {
+		t.Fatalf("openRoots: %v", err)
+	}
+	t.Cleanup(view.closeRoots)
+
+	entry, ok := view.Entry("docs")
+	if !ok {
+		t.Fatalf("entry missing; entries = %v", view.Entries())
+	}
+
+	file := &instanceFile{view: view, entry: entry, rel: "doc.txt"}
+	var out fuse.AttrOut
+	if errno := file.Getattr(context.Background(), nil, &out); errno != 0 {
+		t.Fatalf("Getattr: %v", errno)
+	}
+	if out.Mtime != uint64(stamp.Unix()) {
+		t.Errorf("Mtime = %d, want %d — the backing time never made the trip", out.Mtime, stamp.Unix())
+	}
+	if out.Nlink == 0 {
+		t.Error("Nlink = 0 reads as broken; the view has no hard links to count")
 	}
 }

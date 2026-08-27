@@ -60,6 +60,11 @@ type InstanceView struct {
 	// Policy governs trash and version behaviour for this instance.
 	Policy ProtectionPolicy
 
+	// BuiltAt is when this view was projected. Virtual nodes — the mount root,
+	// the control view — have no backing file to borrow a time from, and a
+	// zero time reads as 1970; the projection moment is the honest stand-in.
+	BuiltAt time.Time
+
 	// CacheTimeout mirrors MountConfig.CacheTimeout, so the node handlers can
 	// decide whether to ask the kernel to cache.
 	CacheTimeout time.Duration
@@ -113,6 +118,7 @@ func BuildInstanceView(identity *ZimaIdentity, access *AccessSnapshot, caps Agen
 		Identity:   identity,
 		Access:     access,
 		Caps:       caps,
+		BuiltAt:    time.Now(),
 		Generation: access.Generation,
 		Policy:     DefaultProtectionPolicy(),
 		entries:    make(map[string]*NamespaceEntry, len(access.Grants)),

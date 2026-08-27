@@ -176,7 +176,19 @@ type instanceRoot struct {
 var (
 	_ gofs.NodeReaddirer = (*instanceRoot)(nil)
 	_ gofs.NodeLookuper  = (*instanceRoot)(nil)
+	_ gofs.NodeGetattrer = (*instanceRoot)(nil)
 )
+
+// Getattr reports the mount root. It is a virtual directory with no backing
+// path; the projection time is its honest timestamp.
+func (r *instanceRoot) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = syscall.S_IFDIR | 0o555
+	built := r.view.BuiltAt
+	out.SetTimes(&built, &built, &built)
+	out.Nlink = 1
+	out.SetTimeout(r.view.CacheTimeout)
+	return 0
+}
 
 // Readdir lists the grant-derived entries. It is computed from the current
 // view on every call rather than fixed at mount time, so a rebuilt view takes
@@ -207,6 +219,9 @@ func (r *instanceRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		out.SetEntryTimeout(0)
 		out.SetAttrTimeout(0)
 		out.Mode = syscall.S_IFDIR | 0o555
+		built := r.view.BuiltAt
+		out.SetTimes(&built, &built, &built)
+		out.Nlink = 1
 		return r.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
@@ -222,6 +237,9 @@ func (r *instanceRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	out.SetEntryTimeout(0)
 	out.SetAttrTimeout(0)
 	out.Mode = syscall.S_IFDIR | entryMode(entry)
+	if info, err := entry.root.Stat(""); err == nil {
+		stampAttrTimes(&out.Attr, info)
+	}
 	return r.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
 }
 
@@ -290,17 +308,22 @@ func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if info.IsDir() {
 		child := &instanceDir{view: d.view, entry: d.entry, rel: childRel}
 		out.Mode = syscall.S_IFDIR | entryMode(d.entry)
+		stampAttrTimes(&out.Attr, info)
 		return d.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
 	child := &instanceFile{view: d.view, entry: d.entry, rel: childRel}
 	out.Mode = syscall.S_IFREG | fileMode(d.entry)
 	out.Size = uint64(info.Size())
+	stampAttrTimes(&out.Attr, info)
 	return d.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFREG}), 0
 }
 
 func (d *instanceDir) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = syscall.S_IFDIR | entryMode(d.entry)
+	if info, err := d.entry.root.Stat(d.rel); err == nil {
+		stampAttrTimes(&out.Attr, info)
+	}
 	out.SetTimeout(d.view.CacheTimeout)
 	return 0
 }
@@ -328,6 +351,7 @@ func (f *instanceFile) Getattr(ctx context.Context, fh gofs.FileHandle, out *fus
 	}
 	out.Mode = syscall.S_IFREG | fileMode(f.entry)
 	out.Size = uint64(info.Size())
+	stampAttrTimes(&out.Attr, info)
 	out.SetTimeout(0)
 	return 0
 }
@@ -434,6 +458,27 @@ func (h *instanceFileHandle) Read(ctx context.Context, dest []byte, off int64) (
 		end = int64(len(h.data))
 	}
 	return fuse.ReadResultData(h.data[off:end]), 0
+}
+
+// stampAttrTimes copies the backing file's times onto a FUSE attr.
+//
+// Without this every node reports the zero time and ls shows 1970 — the
+// backing mtime was in the Stat result all along, it just never made the
+// trip. Nlink is set to 1 for the same reason: zero reads as broken, and the
+// view has no hard links to count.
+func stampAttrTimes(attr *fuse.Attr, info fs.FileInfo) {
+	modified := info.ModTime()
+	attr.SetTimes(&modified, &modified, &modified)
+	attr.Nlink = 1
+}
+
+// stampVirtualTimes marks a node that has no backing file — the control view
+// and its children — with the projection time, the honest stand-in for
+// generated content.
+func stampVirtualTimes(attr *fuse.Attr, view *InstanceView) {
+	built := view.BuiltAt
+	attr.SetTimes(&built, &built, &built)
+	attr.Nlink = 1
 }
 
 // entryMode renders directory permission bits from the grant.
