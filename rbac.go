@@ -111,6 +111,30 @@ type AccessSnapshot struct {
 	Grants     []Grant
 	matcher    *grantMatcher
 	Generation uint64
+
+	// authority, when set, answers every per-path decision from the live
+	// permission client instead of the static matcher. The Grants above are
+	// then only the namespace projection (which directories exist at the mount
+	// root); what an operation may do under them is decided against the
+	// authority's current state, so a revocation reaches an existing mount
+	// without a remount.
+	authority *authorityDecider
+}
+
+// CurrentGeneration is what decision memos must key on.
+//
+// For a static snapshot it is the build-time generation. For an
+// authority-backed one it is the client's live generation, which moves the
+// instant a change event arrives — that is what invalidates the per-view
+// decision cache without anyone rebuilding the view.
+func (s *AccessSnapshot) CurrentGeneration() uint64 {
+	if s == nil {
+		return 0
+	}
+	if s.authority != nil {
+		return uint64(s.authority.generation())
+	}
+	return s.Generation
 }
 
 // NewAccessSnapshot normalizes and indexes a set of grants.
@@ -142,11 +166,7 @@ func (s *AccessSnapshot) Allows(hostPath string, op AccessOp, caps AgentCapabili
 	if s == nil {
 		return false
 	}
-	grant, ok := s.Lookup(hostPath)
-	if !ok {
-		return false
-	}
-	return grantAllows(grant, op, caps)
+	return op != 0 && s.AllowedOps(hostPath, caps)&op == op
 }
 
 // AllowedOps returns the full operation set permitted on hostPath, after
@@ -155,6 +175,9 @@ func (s *AccessSnapshot) Allows(hostPath string, op AccessOp, caps AgentCapabili
 func (s *AccessSnapshot) AllowedOps(hostPath string, caps AgentCapabilities) AccessOp {
 	if s == nil {
 		return 0
+	}
+	if s.authority != nil {
+		return s.authority.allowedOps(hostPath, caps)
 	}
 	grant, ok := s.Lookup(hostPath)
 	if !ok {

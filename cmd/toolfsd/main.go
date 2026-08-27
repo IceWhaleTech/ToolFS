@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/IceWhaleTech/toolfs"
 )
@@ -30,8 +29,8 @@ func main() {
 		root         = flag.String("root", "/mnt/toolfs", "directory under which per-user mount points are created")
 		socketPath   = flag.String("socket", "/run/toolfs/toolfsd.sock", "unix socket for the control API")
 		bindingsPath = flag.String("bindings", "", "JSON file mapping agent accounts to ZimaOS users")
-		filesURL     = flag.String("files-url", "", "IceWhale-Files base URL (default: read from the runtime file)")
-		grantTTL     = flag.Duration("grant-ttl", toolfs.DefaultGrantTTL, "how long an authorization snapshot may be reused")
+		runtimePath  = flag.String("runtime-path", "/run/zimaos", "directory where ZimaOS services publish their addresses")
+		cachePath    = flag.String("permission-cache", "/var/lib/toolfs/permission-cache.json", "where authorization snapshots persist across restarts (empty disables)")
 		allowDelete  = flag.Bool("allow-delete", false, "grant delete on read-write grants (withheld by default)")
 		fallbackUser = flag.String("fallback-user", "", "ZimaOS username used for unbound agent accounts (transition mode)")
 		fallbackUID  = flag.Int("fallback-uid", 0, "ZimaOS numeric uid paired with -fallback-user")
@@ -39,13 +38,13 @@ func main() {
 	)
 	flag.Parse()
 
-	if err := run(*root, *socketPath, *bindingsPath, *filesURL, *grantTTL,
+	if err := run(*root, *socketPath, *bindingsPath, *runtimePath, *cachePath,
 		*allowDelete, *fallbackUser, *fallbackUID, *debug); err != nil {
 		log.Fatalf("toolfsd: %v", err)
 	}
 }
 
-func run(root, socketPath, bindingsPath, filesURL string, grantTTL time.Duration,
+func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
 	allowDelete bool, fallbackUser string, fallbackUID int, debug bool) error {
 
 	if !toolfs.FUSEAvailable() {
@@ -57,7 +56,12 @@ func run(root, socketPath, bindingsPath, filesURL string, grantTTL time.Duration
 		return err
 	}
 
-	provider := toolfs.NewFilesServiceProvider(filesURL, grantTTL)
+	// The watch outlives everything below it; the shutdown signal is what ends
+	// it, so the same context serves both.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	provider := toolfs.StartAuthorityPermissionProvider(ctx, runtimePath, cachePath)
 
 	mounts, err := toolfs.NewMountSet(toolfs.MountSetConfig{
 		Root:         root,
@@ -84,9 +88,6 @@ func run(root, socketPath, bindingsPath, filesURL string, grantTTL time.Duration
 
 	// Tear every mount down on shutdown. Leaving them behind would strand FUSE
 	// mounts whose server is gone, which consumers see as ENOTCONN.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	select {
 	case err := <-serveErr:
 		_ = control.Close()

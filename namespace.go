@@ -252,10 +252,7 @@ type cachedDecision struct {
 // swap of Access would otherwise silently keep serving the old answers — which
 // for a revoked grant means continuing to allow access.
 func (v *InstanceView) allowedOps(entry *NamespaceEntry, rel string) AccessOp {
-	generation := uint64(0)
-	if v.Access != nil {
-		generation = v.Access.Generation
-	}
+	generation := v.Access.CurrentGeneration()
 
 	key := entry.VirtualName + "\x00" + rel
 	if cached, ok := v.decisions.Load(key); ok {
@@ -389,7 +386,7 @@ func BuildInstanceViewForUser(
 	if err != nil {
 		return nil, err
 	}
-	access, err := provider.GrantsFor(ctx, identity.Username)
+	access, err := provider.GrantsFor(ctx, identity)
 	if err != nil {
 		return nil, err
 	}

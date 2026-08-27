@@ -4,16 +4,16 @@ package toolfs
 //
 // The assertions here encode facts measured on a real ZimaOS device
 // (ZimaCube Pro / v1.7.0), not hypotheticals:
-//   - 8 of 14 share rows carried is_deleted=1, so filtering is load-bearing
 //   - /media/ZimaOS-HD is a symlink to /DATA and the table stores the aliased
 //     form with a trailing slash
 //   - parent-rw with child-ro genuinely occurs (HDD-Storage + .../rauc/temp)
+//
+// These cover the *static* provider path (NewAccessSnapshot + matcher). The
+// authority-backed path, where decisions come from the live permission client,
+// is covered in authority_provider_test.go.
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 )
@@ -133,79 +133,12 @@ func TestZeroGrantUserSeesNothing(t *testing.T) {
 	}
 }
 
-func TestDeletedAndDisabledSharesProduceNoGrant(t *testing.T) {
-	// 实测：14 行 share 中 8 行 is_deleted=1。上游 /share/permission 不过滤该列，
-	// 直接采信会造成权限放大，因此 ToolFS 必须自行过滤。
-	rows := []shareRow{
-		{ID: 1, Path: "/DATA/Documents", Username: "alice", Status: "enable"},
-		{ID: 2, Path: "/DATA/Secret", Username: "alice", Deleted: true},
-		{ID: 3, Path: "/DATA/Disabled", Username: "alice", Status: "disable"},
-		{ID: 4, Path: "/DATA/Missing", Username: "alice", Status: "missing"},
-		{ID: 5, Path: "/DATA/Other", Username: "bob", Status: "enable"},
-	}
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Z-Skip-Auth") != "true" {
-			t.Errorf("缺少服务间免鉴权头，实际头部: %v", r.Header)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": rows})
-	}))
-	defer srv.Close()
-
-	provider := NewFilesServiceProvider(srv.URL, 0)
-	snapshot, err := provider.GrantsFor(context.Background(), "alice")
-	if err != nil {
-		t.Fatalf("拉取授权: %v", err)
-	}
-
-	if len(snapshot.Grants) != 1 {
-		t.Fatalf("产生了 %d 条 Grant，期望 1 条（其余应被 is_deleted/status/用户名过滤掉）: %+v",
-			len(snapshot.Grants), snapshot.Grants)
-	}
-	if snapshot.Grants[0].Path != "/DATA/Documents" {
-		t.Errorf("保留下来的是 %q，期望 /DATA/Documents", snapshot.Grants[0].Path)
-	}
-
-	for _, denied := range []string{"/DATA/Secret", "/DATA/Disabled", "/DATA/Missing", "/DATA/Other"} {
-		if snapshot.Allows(denied, OpRead, AgentCapabilities{}) {
-			t.Errorf("%q 仍被放行——权限放大", denied)
-		}
-	}
-}
-
-func TestProviderFailsClosed(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	provider := NewFilesServiceProvider(srv.URL, 0)
-	snapshot, err := provider.GrantsFor(context.Background(), "alice")
-	if err == nil {
-		t.Fatal("上游报错时未返回错误——必须 fail closed，不能被读成「无限制」")
-	}
-	if snapshot != nil {
-		t.Error("上游报错时仍返回了快照")
-	}
-}
-
-func TestMalformedResponseFailsClosed(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("{not json"))
-	}))
-	defer srv.Close()
-
-	provider := NewFilesServiceProvider(srv.URL, 0)
-	if _, err := provider.GrantsFor(context.Background(), "alice"); err == nil {
-		t.Fatal("响应畸形时未返回错误")
-	}
-}
-
 func TestSnapshotRefreshIsRaceFree(t *testing.T) {
 	provider := NewStaticPermissionProvider(map[string][]Grant{
 		"alice": {{ID: 1, Path: "/DATA/Documents"}},
 	})
 
+	alice := &ZimaIdentity{Username: "alice", UserID: 1}
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
@@ -214,7 +147,7 @@ func TestSnapshotRefreshIsRaceFree(t *testing.T) {
 			if i%4 == 0 {
 				provider.SetGrants("alice", []Grant{{ID: 1, Path: "/DATA/Documents", ReadOnly: i%8 == 0}})
 			}
-			snapshot, err := provider.GrantsFor(context.Background(), "alice")
+			snapshot, err := provider.GrantsFor(context.Background(), alice)
 			if err != nil {
 				t.Errorf("并发拉取失败: %v", err)
 				return
@@ -231,11 +164,12 @@ func TestGenerationAdvancesOnRefresh(t *testing.T) {
 		"alice": {{ID: 1, Path: "/DATA/Documents"}},
 	})
 
-	first, err := provider.FreshGrantsFor(context.Background(), "alice")
+	alice := &ZimaIdentity{Username: "alice", UserID: 1}
+	first, err := provider.FreshGrantsFor(context.Background(), alice)
 	if err != nil {
 		t.Fatalf("首次拉取: %v", err)
 	}
-	second, err := provider.FreshGrantsFor(context.Background(), "alice")
+	second, err := provider.FreshGrantsFor(context.Background(), alice)
 	if err != nil {
 		t.Fatalf("再次拉取: %v", err)
 	}
