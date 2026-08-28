@@ -37,11 +37,11 @@ func mountTwoUsers(t *testing.T) (aliceMnt, bobMnt string, cleanup func()) {
 	}
 
 	ctx := context.Background()
-	aliceHandle, err := MountForIdentity(ctx, resolver, provider, "agent-user-1", aliceMnt, AgentCapabilities{}, MountConfig{})
+	aliceHandle, err := MountForIdentity(ctx, resolver, provider, "agent-user-1", "", aliceMnt, AgentCapabilities{}, MountConfig{})
 	if err != nil {
 		t.Skipf("跳过：本环境无法挂载 FUSE (%v)", err)
 	}
-	bobHandle, err := MountForIdentity(ctx, resolver, provider, "agent-user-2", bobMnt, AgentCapabilities{}, MountConfig{})
+	bobHandle, err := MountForIdentity(ctx, resolver, provider, "agent-user-2", "", bobMnt, AgentCapabilities{}, MountConfig{})
 	if err != nil {
 		_ = aliceHandle.Unmount()
 		t.Skipf("跳过：本环境无法挂载 FUSE (%v)", err)
@@ -156,7 +156,7 @@ func TestMount_UnmountIsIdempotent(t *testing.T) {
 	}
 
 	handle, err := MountForIdentity(context.Background(), resolver, provider,
-		"agent-user-1", mnt, AgentCapabilities{}, MountConfig{})
+		"agent-user-1", "", mnt, AgentCapabilities{}, MountConfig{})
 	if err != nil {
 		t.Skipf("跳过：本环境无法挂载 FUSE (%v)", err)
 	}

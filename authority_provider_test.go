@@ -130,7 +130,7 @@ func TestAuthorityProjectionAndDecisions(t *testing.T) {
 	provider := startProvider(t, authority)
 	identity := &ZimaIdentity{Username: "alice", UserID: 7}
 
-	access, err := provider.GrantsFor(context.Background(), identity)
+	access, err := provider.GrantsFor(context.Background(), identity, "")
 	if err != nil {
 		t.Fatalf("GrantsFor: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestRevocationReachesABuiltViewWithoutRemount(t *testing.T) {
 	provider := startProvider(t, authority)
 	identity := &ZimaIdentity{Username: "alice", UserID: 7}
 
-	access, err := provider.GrantsFor(context.Background(), identity)
+	access, err := provider.GrantsFor(context.Background(), identity, "")
 	if err != nil {
 		t.Fatalf("GrantsFor: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestAuthorityProviderFailsClosed(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	provider := NewAuthorityPermissionProvider(permission.New(func() string { return server.URL }))
-	if _, err := provider.GrantsFor(context.Background(), &ZimaIdentity{Username: "alice", UserID: 7}); err == nil {
+	if _, err := provider.GrantsFor(context.Background(), &ZimaIdentity{Username: "alice", UserID: 7}, ""); err == nil {
 		t.Fatal("an authority error produced a snapshot instead of an error")
 	}
 }

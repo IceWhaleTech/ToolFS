@@ -32,12 +32,13 @@ var ErrNoGrants = errors.New("toolfs: no active grants for user")
 // PermissionProvider supplies per-user authorization snapshots.
 type PermissionProvider interface {
 	// GrantsFor returns a snapshot for the resolved identity, possibly served
-	// from cache.
-	GrantsFor(ctx context.Context, identity *ZimaIdentity) (*AccessSnapshot, error)
+	// from cache. When app is non-empty and the (user, app) agent is scoped,
+	// the snapshot is the agent subject's, already capped by the owner user.
+	GrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error)
 	// FreshGrantsFor is GrantsFor with the strongest freshness the provider
 	// can offer. Destructive operations use this so an irreversible action is
 	// never taken on authorization staler than it has to be.
-	FreshGrantsFor(ctx context.Context, identity *ZimaIdentity) (*AccessSnapshot, error)
+	FreshGrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error)
 	// Invalidate drops any provider-side cache for the user.
 	Invalidate(username string)
 }
@@ -139,17 +140,48 @@ func (p *AuthorityPermissionProvider) handleChange(generation int64) {
 	}
 }
 
+// homeRootPath is where UserService creates account homes; must match its
+// HomeRootPath. The one spelling the authority writes home rows under.
+const homeRootPath = "/DATA/.home"
+
+// homeEntryName is the fixed virtual name of the account's own home entry.
+const homeEntryName = "Home"
+
 // GrantsFor projects the authority's snapshot for one identity.
-func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *ZimaIdentity) (*AccessSnapshot, error) {
+//
+// When app is non-empty the agent sub-scope is consulted: the agent subject is
+// "agent:<uid>:<app>". The agent is "scoped" iff it holds any path-read grant
+// of its own. Because the engine already intersects an owned agent with its
+// owner user, a scoped agent snapshot is guaranteed <= the user's, so the agent
+// subject can be projected directly. An UNSCOPED agent (no grants of its own)
+// falls back to the full user view for backward compatibility. A Snapshot error
+// on the agent subject fails closed — it never falls through to the user view.
+func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error) {
 	if identity == nil {
 		return nil, ErrNoIdentity
 	}
-	subject := permission.NamespaceUser + ":" + itoa(identity.UserID)
+	userSubject := permission.NamespaceUser + ":" + itoa(identity.UserID)
+	subject := userSubject
 
 	snapshot, err := p.client.Snapshot(ctx, subject)
 	if err != nil {
 		// Fail closed. A provider error must never be read as "no restrictions".
 		return nil, err
+	}
+
+	if app != "" {
+		agentSubject := permission.NamespaceAgent + ":" + itoa(identity.UserID) + ":" + app
+		agentSnap, err := p.client.Snapshot(ctx, agentSubject)
+		if err != nil {
+			// Fail closed, never fall through to the full user view on error.
+			return nil, err
+		}
+		// A scoped agent has at least one path-read grant of its own; project
+		// the agent subject in that case. An unscoped agent keeps the user view.
+		if len(agentSnap.Objects(permission.NamespacePath, permission.RelRead)) > 0 {
+			subject = agentSubject
+			snapshot = agentSnap
+		}
 	}
 
 	p.mu.Lock()
@@ -162,14 +194,26 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 	// handle opens — so none of the alias folding the static path applies here.
 	roots := snapshot.Objects(permission.NamespacePath, permission.RelRead)
 	grants := make([]Grant, 0, len(roots))
+	homePath := homeRootPath + "/" + identity.Username
 	for i, root := range roots {
-		grants = append(grants, Grant{
+		grant := Grant{
 			// The authority has no share-row id; the index keeps entry naming
 			// deterministic for one snapshot, which is all the id is for.
 			ID:       i + 1,
 			Path:     root,
 			ReadOnly: !snapshot.Allows(permission.NamespacePath, root, permission.RelWrite),
-		})
+		}
+		if root == homePath {
+			// The account's own home gets a fixed name and first position:
+			// dispatchers on the other side of the mount translate host home
+			// paths into the view, and that only works when the entry name
+			// cannot drift with grant order or basename collisions. A share
+			// that happens to be called Home is the one that gets suffixed.
+			grant.Name = homeEntryName
+			grants = append([]Grant{grant}, grants...)
+			continue
+		}
+		grants = append(grants, grant)
 	}
 
 	return &AccessSnapshot{
@@ -185,8 +229,8 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 // FreshGrantsFor is GrantsFor: freshness is event-driven here, so the cached
 // answer is already as fresh as a forced round trip would be — the cache is
 // emptied the moment the authority announces a change.
-func (p *AuthorityPermissionProvider) FreshGrantsFor(ctx context.Context, identity *ZimaIdentity) (*AccessSnapshot, error) {
-	return p.GrantsFor(ctx, identity)
+func (p *AuthorityPermissionProvider) FreshGrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error) {
+	return p.GrantsFor(ctx, identity, app)
 }
 
 // Invalidate implements PermissionProvider. The client's cache is governed by
@@ -263,12 +307,12 @@ func (p *StaticPermissionProvider) SetGrants(username string, grants []Grant) {
 }
 
 // GrantsFor implements PermissionProvider.
-func (p *StaticPermissionProvider) GrantsFor(ctx context.Context, identity *ZimaIdentity) (*AccessSnapshot, error) {
-	return p.FreshGrantsFor(ctx, identity)
+func (p *StaticPermissionProvider) GrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error) {
+	return p.FreshGrantsFor(ctx, identity, app)
 }
 
 // FreshGrantsFor implements PermissionProvider.
-func (p *StaticPermissionProvider) FreshGrantsFor(_ context.Context, identity *ZimaIdentity) (*AccessSnapshot, error) {
+func (p *StaticPermissionProvider) FreshGrantsFor(_ context.Context, identity *ZimaIdentity, _ string) (*AccessSnapshot, error) {
 	if identity == nil {
 		return nil, ErrNoIdentity
 	}

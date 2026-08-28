@@ -32,7 +32,7 @@ func mountWritable(t *testing.T, caps AgentCapabilities) (mnt, dataBase string, 
 	}
 
 	handle, err := MountForIdentity(context.Background(), resolver, provider,
-		"agent-user-1", mnt, caps, MountConfig{})
+		"agent-user-1", "", mnt, caps, MountConfig{})
 	if err != nil {
 		t.Skipf("跳过：本环境无法挂载 FUSE (%v)", err)
 	}
@@ -196,7 +196,7 @@ func TestMutate_ReadOnlyGrantRejectsWrites(t *testing.T) {
 		t.Fatalf("准备挂载点: %v", err)
 	}
 	handle, err := MountForIdentity(context.Background(), resolver, provider,
-		"agent-ro", mnt, AgentCapabilities{AllowDelete: true}, MountConfig{})
+		"agent-ro", "", mnt, AgentCapabilities{AllowDelete: true}, MountConfig{})
 	if err != nil {
 		t.Skipf("跳过：本环境无法挂载 FUSE (%v)", err)
 	}

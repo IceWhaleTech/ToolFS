@@ -386,13 +386,14 @@ func BuildInstanceViewForUser(
 	resolver IdentityResolver,
 	provider PermissionProvider,
 	agentUserID string,
+	app string,
 	caps AgentCapabilities,
 ) (*InstanceView, error) {
 	identity, err := resolver.Resolve(ctx, agentUserID)
 	if err != nil {
 		return nil, err
 	}
-	access, err := provider.GrantsFor(ctx, identity)
+	access, err := provider.GrantsFor(ctx, identity, app)
 	if err != nil {
 		return nil, err
 	}

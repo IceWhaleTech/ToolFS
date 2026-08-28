@@ -109,11 +109,12 @@ func MountForIdentity(
 	resolver IdentityResolver,
 	provider PermissionProvider,
 	agentUserID string,
+	app string,
 	mountPoint string,
 	caps AgentCapabilities,
 	config MountConfig,
 ) (MountHandle, error) {
-	view, err := BuildInstanceViewForUser(ctx, resolver, provider, agentUserID, caps)
+	view, err := BuildInstanceViewForUser(ctx, resolver, provider, agentUserID, app, caps)
 	if err != nil {
 		return nil, err
 	}

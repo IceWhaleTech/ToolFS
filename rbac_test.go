@@ -147,7 +147,7 @@ func TestSnapshotRefreshIsRaceFree(t *testing.T) {
 			if i%4 == 0 {
 				provider.SetGrants("alice", []Grant{{ID: 1, Path: "/DATA/Documents", ReadOnly: i%8 == 0}})
 			}
-			snapshot, err := provider.GrantsFor(context.Background(), alice)
+			snapshot, err := provider.GrantsFor(context.Background(), alice, "")
 			if err != nil {
 				t.Errorf("并发拉取失败: %v", err)
 				return
@@ -165,11 +165,11 @@ func TestGenerationAdvancesOnRefresh(t *testing.T) {
 	})
 
 	alice := &ZimaIdentity{Username: "alice", UserID: 1}
-	first, err := provider.FreshGrantsFor(context.Background(), alice)
+	first, err := provider.FreshGrantsFor(context.Background(), alice, "")
 	if err != nil {
 		t.Fatalf("首次拉取: %v", err)
 	}
-	second, err := provider.FreshGrantsFor(context.Background(), alice)
+	second, err := provider.FreshGrantsFor(context.Background(), alice, "")
 	if err != nil {
 		t.Fatalf("再次拉取: %v", err)
 	}

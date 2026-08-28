@@ -54,13 +54,20 @@ type MountSet struct {
 
 type liveMount struct {
 	agentUserID string
+	app         string
 	handle      MountHandle
 	bindSource  string
 }
 
+// mountKey composes the map key for a live mount. Mounts are keyed per
+// (agentUserID, app) so each app's agent instance gets its own view; the NUL
+// separator cannot appear in either component, so the key is unambiguous.
+func mountKey(agentUserID, app string) string { return agentUserID + "\x00" + app }
+
 // MountInfo describes a live mount for the control API.
 type MountInfo struct {
 	AgentUserID string `json:"agent_user_id"`
+	App         string `json:"app,omitempty"`
 	Username    string `json:"username"`
 	UserID      int    `json:"user_id"`
 	// BindSource is the stable directory an orchestrator should bind into a
@@ -89,14 +96,17 @@ func NewMountSet(config MountSetConfig, resolver IdentityResolver, provider Perm
 	}, nil
 }
 
-// Mount creates a mount for an agent account, or returns the existing one.
-func (s *MountSet) Mount(ctx context.Context, agentUserID string, caps *AgentCapabilities) (MountInfo, error) {
+// Mount creates a mount for an (agent account, app) pair, or returns the
+// existing one. Each (agentUserID, app) gets its own mount and its own view.
+func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, caps *AgentCapabilities) (MountInfo, error) {
 	if agentUserID == "" {
 		return MountInfo{}, errors.New("toolfs: agent user id is required")
 	}
 
+	key := mountKey(agentUserID, app)
+
 	s.mu.Lock()
-	if existing, ok := s.mounts[agentUserID]; ok {
+	if existing, ok := s.mounts[key]; ok {
 		info := s.infoFor(existing)
 		s.mu.Unlock()
 		return info, ErrMountExists
@@ -115,13 +125,15 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID string, caps *AgentCap
 		effective = *caps
 	}
 
-	bindSource := filepath.Join(s.config.Root, identity.mountDirName())
+	// The bind source differs per (user, app) so each app gets its own mount
+	// point: blue and photos never share a bind source or a FUSE view.
+	bindSource := filepath.Join(s.config.Root, identity.mountDirName(), app)
 	mountPoint := filepath.Join(bindSource, "workspace")
 	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
 		return MountInfo{}, fmt.Errorf("toolfs: cannot create mount point: %w", err)
 	}
 
-	handle, err := MountForIdentity(ctx, s.resolver, s.provider, agentUserID,
+	handle, err := MountForIdentity(ctx, s.resolver, s.provider, agentUserID, app,
 		mountPoint, effective, s.config.MountOptions)
 	if err != nil {
 		return MountInfo{}, err
@@ -130,12 +142,12 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID string, caps *AgentCap
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Another caller may have raced us; keep theirs and drop ours.
-	if existing, ok := s.mounts[agentUserID]; ok {
+	if existing, ok := s.mounts[key]; ok {
 		_ = handle.Unmount()
 		return s.infoFor(existing), ErrMountExists
 	}
-	live := &liveMount{agentUserID: agentUserID, handle: handle, bindSource: bindSource}
-	s.mounts[agentUserID] = live
+	live := &liveMount{agentUserID: agentUserID, app: app, handle: handle, bindSource: bindSource}
+	s.mounts[key] = live
 	return s.infoFor(live), nil
 }
 
@@ -144,11 +156,12 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID string, caps *AgentCap
 // The mount point directory is intentionally left in place: it is below the
 // stable bind source, and recreating it on the next mount is cheaper than
 // coordinating removal with a consumer that may still have it bound.
-func (s *MountSet) Unmount(agentUserID string) error {
+func (s *MountSet) Unmount(agentUserID, app string) error {
+	key := mountKey(agentUserID, app)
 	s.mu.Lock()
-	live, ok := s.mounts[agentUserID]
+	live, ok := s.mounts[key]
 	if ok {
-		delete(s.mounts, agentUserID)
+		delete(s.mounts, key)
 	}
 	s.mu.Unlock()
 
@@ -167,7 +180,12 @@ func (s *MountSet) List() []MountInfo {
 	for _, live := range s.mounts {
 		out = append(out, s.infoFor(live))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].AgentUserID < out[j].AgentUserID })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AgentUserID != out[j].AgentUserID {
+			return out[i].AgentUserID < out[j].AgentUserID
+		}
+		return out[i].App < out[j].App
+	})
 	return out
 }
 
@@ -196,6 +214,7 @@ func (s *MountSet) infoFor(live *liveMount) MountInfo {
 	identity := live.handle.Identity()
 	info := MountInfo{
 		AgentUserID: live.agentUserID,
+		App:         live.app,
 		BindSource:  live.bindSource,
 		MountPoint:  live.handle.MountPoint(),
 	}

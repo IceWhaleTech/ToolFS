@@ -24,7 +24,7 @@ func mountForRecovery(t *testing.T, sessionID, taskID string) (mnt, dataBase str
 	dataBase, resolver, provider := twoUserFixture(t)
 
 	built, err := BuildInstanceViewForUser(context.Background(), resolver, provider,
-		"agent-user-1", AgentCapabilities{AllowDelete: true})
+		"agent-user-1", "", AgentCapabilities{AllowDelete: true})
 	if err != nil {
 		t.Fatalf("构建视图: %v", err)
 	}

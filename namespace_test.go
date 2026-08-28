@@ -54,11 +54,11 @@ func TestAcceptance_EachUserSeesOnlyGrantedEntries(t *testing.T) {
 	_, resolver, provider := twoUserFixture(t)
 	ctx := context.Background()
 
-	aliceView, err := BuildInstanceViewForUser(ctx, resolver, provider, "agent-user-1", AgentCapabilities{})
+	aliceView, err := BuildInstanceViewForUser(ctx, resolver, provider, "agent-user-1", "", AgentCapabilities{})
 	if err != nil {
 		t.Fatalf("构建 alice 视图: %v", err)
 	}
-	bobView, err := BuildInstanceViewForUser(ctx, resolver, provider, "agent-user-2", AgentCapabilities{})
+	bobView, err := BuildInstanceViewForUser(ctx, resolver, provider, "agent-user-2", "", AgentCapabilities{})
 	if err != nil {
 		t.Fatalf("构建 bob 视图: %v", err)
 	}
@@ -91,7 +91,7 @@ func assertEntries(t *testing.T, who string, got, want []string) {
 func TestUnboundAgentAccountIsDenied(t *testing.T) {
 	_, resolver, provider := twoUserFixture(t)
 
-	_, err := BuildInstanceViewForUser(context.Background(), resolver, provider, "agent-user-unknown", AgentCapabilities{})
+	_, err := BuildInstanceViewForUser(context.Background(), resolver, provider, "agent-user-unknown", "", AgentCapabilities{})
 	if err == nil {
 		t.Fatal("未绑定账号仍构建出了视图")
 	}
@@ -105,7 +105,7 @@ func TestFallbackIdentityServesTransitionMode(t *testing.T) {
 	_, resolver, provider := twoUserFixture(t)
 	resolver.SetFallback(&ZimaIdentity{Username: "alice", UserID: 1001, Role: "user"})
 
-	view, err := BuildInstanceViewForUser(context.Background(), resolver, provider, "agent-user-unknown", AgentCapabilities{})
+	view, err := BuildInstanceViewForUser(context.Background(), resolver, provider, "agent-user-unknown", "", AgentCapabilities{})
 	if err != nil {
 		t.Fatalf("过渡模式下构建视图失败: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestFallbackIdentityServesTransitionMode(t *testing.T) {
 func TestVirtualBackendsAreNotExposed(t *testing.T) {
 	_, resolver, provider := twoUserFixture(t)
 
-	view, err := BuildInstanceViewForUser(context.Background(), resolver, provider, "agent-user-1", AgentCapabilities{})
+	view, err := BuildInstanceViewForUser(context.Background(), resolver, provider, "agent-user-1", "", AgentCapabilities{})
 	if err != nil {
 		t.Fatalf("构建视图: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRevocationRemovesEntry(t *testing.T) {
 	_, resolver, provider := twoUserFixture(t)
 	ctx := context.Background()
 
-	view, err := BuildInstanceViewForUser(ctx, resolver, provider, "agent-user-1", AgentCapabilities{})
+	view, err := BuildInstanceViewForUser(ctx, resolver, provider, "agent-user-1", "", AgentCapabilities{})
 	if err != nil {
 		t.Fatalf("构建视图: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestRevocationRemovesEntry(t *testing.T) {
 
 	provider.SetGrants("alice", []Grant{{ID: 1, Name: "Documents", Path: view.entries["Documents"].HostPath}})
 
-	rebuilt, err := BuildInstanceViewForUser(ctx, resolver, provider, "agent-user-1", AgentCapabilities{})
+	rebuilt, err := BuildInstanceViewForUser(ctx, resolver, provider, "agent-user-1", "", AgentCapabilities{})
 	if err != nil {
 		t.Fatalf("撤权后重建视图: %v", err)
 	}

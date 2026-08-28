@@ -98,6 +98,7 @@ func (c *ControlServer) SocketPath() string { return c.socketPath }
 
 type mountRequest struct {
 	AgentUserID  string   `json:"agent_user_id"`
+	App          string   `json:"app,omitempty"`
 	AllowDelete  *bool    `json:"allow_delete,omitempty"`
 	DenyPatterns []string `json:"deny_patterns,omitempty"`
 }
@@ -140,7 +141,7 @@ func (c *ControlServer) handleMount(w http.ResponseWriter, r *http.Request) {
 		caps = &effective
 	}
 
-	info, err := c.mounts.Mount(r.Context(), req.AgentUserID, caps)
+	info, err := c.mounts.Mount(r.Context(), req.AgentUserID, req.App, caps)
 	switch {
 	case errors.Is(err, ErrMountExists):
 		// Idempotent from the caller's perspective: report the live mount.
@@ -158,7 +159,8 @@ func (c *ControlServer) handleMount(w http.ResponseWriter, r *http.Request) {
 
 func (c *ControlServer) handleUnmount(w http.ResponseWriter, r *http.Request) {
 	agentUserID := r.PathValue("agentUserID")
-	err := c.mounts.Unmount(agentUserID)
+	app := r.URL.Query().Get("app")
+	err := c.mounts.Unmount(agentUserID, app)
 	switch {
 	case errors.Is(err, ErrMountNotFound):
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: err.Error()})
