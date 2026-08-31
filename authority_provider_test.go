@@ -191,8 +191,10 @@ func TestRevocationReachesABuiltViewWithoutRemount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildInstanceView: %v", err)
 	}
-	entry, ok := view.Entry("Docs")
-	if !ok {
+	// /media/Docs projects to the top-level space "Docs" (the /media prefix is
+	// stripped by the default alias table).
+	entry, _, err := view.Resolve("Docs")
+	if err != nil || entry == nil {
 		t.Fatalf("the granted root is missing from the view; entries = %v", view.Entries())
 	}
 	if !view.Allows(entry, "f.txt", OpModify) {

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -97,8 +98,14 @@ func (c *ControlServer) Close() error {
 func (c *ControlServer) SocketPath() string { return c.socketPath }
 
 type mountRequest struct {
-	AgentUserID  string   `json:"agent_user_id"`
-	App          string   `json:"app,omitempty"`
+	AgentUserID string `json:"agent_user_id"`
+	App         string `json:"app,omitempty"`
+	// Username and Role are the authoritative identity, resolved by the caller
+	// (agentd) from the verified ZimaOS token and passed straight through.
+	// When Username is present, ToolFS uses this identity directly and does not
+	// consult its own binding table — the token is the single source of truth.
+	Username     string   `json:"username,omitempty"`
+	Role         string   `json:"role,omitempty"`
 	AllowDelete  *bool    `json:"allow_delete,omitempty"`
 	DenyPatterns []string `json:"deny_patterns,omitempty"`
 }
@@ -141,7 +148,23 @@ func (c *ControlServer) handleMount(w http.ResponseWriter, r *http.Request) {
 		caps = &effective
 	}
 
-	info, err := c.mounts.Mount(r.Context(), req.AgentUserID, req.App, caps)
+	// The caller supplies the identity from the verified token. The numeric uid
+	// is the account id itself (agent_user_id); the username and role are the
+	// parts a bare id cannot carry. With an identity present ToolFS trusts it and
+	// skips its binding table; without one it falls back to the resolver.
+	var identity *ZimaIdentity
+	if req.Username != "" {
+		uid, convErr := strconv.Atoi(req.AgentUserID)
+		if convErr != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{
+				Error: "agent_user_id must be numeric when username is provided",
+			})
+			return
+		}
+		identity = &ZimaIdentity{UserID: uid, Username: req.Username, Role: req.Role}
+	}
+
+	info, err := c.mounts.Mount(r.Context(), req.AgentUserID, req.App, identity, caps)
 	switch {
 	case errors.Is(err, ErrMountExists):
 		// Idempotent from the caller's perspective: report the live mount.

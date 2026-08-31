@@ -99,6 +99,11 @@ type AgentCapabilities struct {
 	// grant root. An invalid pattern fails mount creation; a match failure is
 	// never treated as "allow".
 	DenyPatterns []string
+	// ViewAliases is the host→view path rewrite table (see viewpath.go). Empty
+	// falls back to DefaultZimaViewAliases. It is the single source of truth
+	// the agent-side dispatcher must share, so the mount view and the path the
+	// agent works under stay the same.
+	ViewAliases []PathAlias
 }
 
 // AccessSnapshot is an immutable view of one user's authorization at a point

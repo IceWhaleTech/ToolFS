@@ -72,6 +72,12 @@ func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
 		return err
 	}
 
+	// A change to the authority — any grant added or revoked anywhere, including
+	// a share to a user that a different account edited — reprojects every live
+	// mount, so a running instance's view tracks the current grants without a
+	// remount. Only mounts whose grant set actually changed are rebuilt.
+	provider.OnChange(func(int64) { mounts.Reproject(ctx) })
+
 	control := toolfs.NewControlServer(mounts, socketPath)
 	if err := control.Listen(); err != nil {
 		return fmt.Errorf("cannot listen on %s: %w", socketPath, err)

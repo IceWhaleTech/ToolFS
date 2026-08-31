@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -98,7 +99,7 @@ func NewMountSet(config MountSetConfig, resolver IdentityResolver, provider Perm
 
 // Mount creates a mount for an (agent account, app) pair, or returns the
 // existing one. Each (agentUserID, app) gets its own mount and its own view.
-func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, caps *AgentCapabilities) (MountInfo, error) {
+func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, identity *ZimaIdentity, caps *AgentCapabilities) (MountInfo, error) {
 	if agentUserID == "" {
 		return MountInfo{}, errors.New("toolfs: agent user id is required")
 	}
@@ -113,11 +114,21 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, caps *Age
 	}
 	s.mu.Unlock()
 
-	// Resolve identity first: the mount path is derived from the numeric ZimaOS
-	// user id, never from the agent-supplied string.
-	identity, err := s.resolver.Resolve(ctx, agentUserID)
-	if err != nil {
-		return MountInfo{}, err
+	// Identity: prefer the one the caller supplied from the verified token —
+	// the single source of truth — and resolve only when none is given. The
+	// mount path is derived from the numeric ZimaOS user id, never from the
+	// agent-supplied string. A supplied identity is wrapped in a one-shot
+	// resolver so the view build below sees exactly the same subject.
+	resolver := s.resolver
+	resolved := identity
+	if resolved == nil {
+		var err error
+		resolved, err = s.resolver.Resolve(ctx, agentUserID)
+		if err != nil {
+			return MountInfo{}, err
+		}
+	} else {
+		resolver = NewStaticIdentityResolver(map[string]ZimaIdentity{agentUserID: *identity})
 	}
 
 	effective := s.config.DefaultCaps
@@ -127,13 +138,13 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, caps *Age
 
 	// The bind source differs per (user, app) so each app gets its own mount
 	// point: blue and photos never share a bind source or a FUSE view.
-	bindSource := filepath.Join(s.config.Root, identity.mountDirName(), app)
+	bindSource := filepath.Join(s.config.Root, resolved.mountDirName(), app)
 	mountPoint := filepath.Join(bindSource, "workspace")
 	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
 		return MountInfo{}, fmt.Errorf("toolfs: cannot create mount point: %w", err)
 	}
 
-	handle, err := MountForIdentity(ctx, s.resolver, s.provider, agentUserID, app,
+	handle, err := MountForIdentity(ctx, resolver, s.provider, agentUserID, app,
 		mountPoint, effective, s.config.MountOptions)
 	if err != nil {
 		return MountInfo{}, err
@@ -149,6 +160,36 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, caps *Age
 	live := &liveMount{agentUserID: agentUserID, app: app, handle: handle, bindSource: bindSource}
 	s.mounts[key] = live
 	return s.infoFor(live), nil
+}
+
+// Reproject rebuilds every live mount's view from the authority's current
+// grants. Wired to the permission provider's change hook, so a grant added or
+// revoked — including a share to this user that a different account changed —
+// takes effect on the running mount without a remount. Each view is rebuilt
+// only if its grant set actually changed, so an unrelated device-wide change
+// costs one comparison per mount.
+func (s *MountSet) Reproject(ctx context.Context) {
+	s.mu.Lock()
+	live := make([]*liveMount, 0, len(s.mounts))
+	for _, m := range s.mounts {
+		live = append(live, m)
+	}
+	s.mu.Unlock()
+
+	for _, m := range live {
+		view := m.handle.View()
+		if view == nil {
+			continue
+		}
+		fresh, err := BuildInstanceViewForIdentity(ctx, s.provider, view.Identity, m.app, view.Caps)
+		if err != nil {
+			log.Printf("toolfs: reproject %s/%s: build failed: %v", m.agentUserID, m.app, err)
+			continue
+		}
+		if _, err := view.reproject(fresh); err != nil {
+			log.Printf("toolfs: reproject %s/%s: swap failed: %v", m.agentUserID, m.app, err)
+		}
+	}
 }
 
 // Unmount tears down one mount.

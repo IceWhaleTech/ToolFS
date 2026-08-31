@@ -193,8 +193,9 @@ func TestAttributesCarryTheBackingModTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	access := NewAccessSnapshot("alice", 1001, "user", []Grant{{ID: 1, Name: "docs", Path: dir}}, 1)
-	view, err := BuildInstanceView(&ZimaIdentity{Username: "alice", UserID: 1001}, access, AgentCapabilities{})
+	access := NewAccessSnapshot("alice", 1001, "user", []Grant{{ID: 1, Path: dir}}, 1)
+	view, err := BuildInstanceView(&ZimaIdentity{Username: "alice", UserID: 1001}, access,
+		AgentCapabilities{ViewAliases: []PathAlias{{Host: dir, View: "/docs"}}})
 	if err != nil {
 		t.Fatalf("BuildInstanceView: %v", err)
 	}
@@ -203,8 +204,8 @@ func TestAttributesCarryTheBackingModTime(t *testing.T) {
 	}
 	t.Cleanup(view.closeRoots)
 
-	entry, ok := view.Entry("docs")
-	if !ok {
+	entry, _, err := view.Resolve("docs")
+	if err != nil || entry == nil {
 		t.Fatalf("entry missing; entries = %v", view.Entries())
 	}
 

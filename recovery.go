@@ -473,8 +473,7 @@ func (v *InstanceView) Flashback(mountRel, restorePointID string) error {
 // ListChanges reports journal entries across every writable grant.
 func (v *InstanceView) ListChanges(filter ChangeFilter) ([]ProtectedChange, error) {
 	var out []ProtectedChange
-	for _, name := range v.order {
-		entry := v.entries[name]
+	for _, entry := range v.Grants() {
 		if entry.protection == nil {
 			continue
 		}
@@ -494,8 +493,7 @@ func (v *InstanceView) ListChanges(filter ChangeFilter) ([]ProtectedChange, erro
 // rather than clobbering it.
 func (v *InstanceView) UndoChanges(filter ChangeFilter) (*UndoReport, error) {
 	combined := &UndoReport{}
-	for _, name := range v.order {
-		entry := v.entries[name]
+	for _, entry := range v.Grants() {
 		if entry.protection == nil {
 			continue
 		}

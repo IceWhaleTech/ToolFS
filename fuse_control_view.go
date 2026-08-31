@@ -28,6 +28,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"syscall"
 
 	gofs "github.com/hanwen/go-fuse/v2/fs"
@@ -165,9 +166,8 @@ func (f *controlFile) render() ([]byte, syscall.Errno) {
 // renderChanges lists journal entries the caller may still see.
 func (f *controlFile) renderChanges() ([]byte, syscall.Errno) {
 	var buf bytes.Buffer
-	for _, name := range f.view.Entries() {
-		entry, ok := f.view.Entry(name)
-		if !ok || entry.protection == nil {
+	for _, entry := range f.view.Grants() {
+		if entry.protection == nil {
 			continue
 		}
 		changes, err := entry.protection.ListChanges(ChangeFilter{})
@@ -184,8 +184,8 @@ func (f *controlFile) renderChanges() ([]byte, syscall.Errno) {
 				"seq":        change.Seq,
 				"at":         change.At,
 				"op":         change.Op,
-				"path":       name + "/" + change.Path,
-				"from_path":  optionalPath(name, change.FromPath),
+				"path":       mountRel(entry.ViewPath, change.Path),
+				"from_path":  optionalPath(entry.ViewPath, change.FromPath),
 				"session_id": change.SessionID,
 				"task_id":    change.TaskID,
 				"undoable":   change.Recovery != "" || change.Op == MutationCreate || change.Op == MutationRename,
@@ -198,9 +198,8 @@ func (f *controlFile) renderChanges() ([]byte, syscall.Errno) {
 // renderTrash lists recoverable deletions.
 func (f *controlFile) renderTrash() ([]byte, syscall.Errno) {
 	var buf bytes.Buffer
-	for _, name := range f.view.Entries() {
-		entry, ok := f.view.Entry(name)
-		if !ok || entry.protection == nil {
+	for _, entry := range f.view.Grants() {
+		if entry.protection == nil {
 			continue
 		}
 		items, err := entry.protection.ListTrash()
@@ -213,7 +212,7 @@ func (f *controlFile) renderTrash() ([]byte, syscall.Errno) {
 			}
 			writeJSONLine(&buf, map[string]any{
 				"id":         item.ID,
-				"path":       name + "/" + item.OriginalPath,
+				"path":       mountRel(entry.ViewPath, item.OriginalPath),
 				"is_dir":     item.IsDir,
 				"size":       item.Size,
 				"deleted_at": item.DeletedAt,
@@ -230,9 +229,8 @@ func (f *controlFile) renderTrash() ([]byte, syscall.Errno) {
 // content the caller might not otherwise enumerate.
 func (f *controlFile) renderRestorePoints() ([]byte, syscall.Errno) {
 	var buf bytes.Buffer
-	for _, name := range f.view.Entries() {
-		entry, ok := f.view.Entry(name)
-		if !ok || entry.protection == nil {
+	for _, entry := range f.view.Grants() {
+		if entry.protection == nil {
 			continue
 		}
 
@@ -255,7 +253,7 @@ func (f *controlFile) renderRestorePoints() ([]byte, syscall.Errno) {
 				writeJSONLine(&buf, map[string]any{
 					"id":   point.ID,
 					"kind": point.Kind,
-					"path": name + "/" + point.Path,
+					"path": mountRel(entry.ViewPath, point.Path),
 					"size": point.Size,
 					"at":   point.At,
 				})
@@ -265,12 +263,23 @@ func (f *controlFile) renderRestorePoints() ([]byte, syscall.Errno) {
 	return buf.Bytes(), 0
 }
 
-// optionalPath prefixes a grant-relative path when it is set.
-func optionalPath(entryName, rel string) any {
+// mountRel renders a grant-relative path as a path relative to the mount root,
+// under the grant's full view path (leading slash dropped so it reads as a
+// mount-relative path, e.g. Home/casaos/topics/Work/foo.txt).
+func mountRel(viewPath, rel string) string {
+	base := strings.TrimPrefix(viewPath, "/")
+	if rel == "" {
+		return base
+	}
+	return base + "/" + rel
+}
+
+// optionalPath renders a grant-relative path under its view path when set.
+func optionalPath(viewPath, rel string) any {
 	if rel == "" {
 		return nil
 	}
-	return entryName + "/" + rel
+	return mountRel(viewPath, rel)
 }
 
 // writeJSONLine appends one JSON object followed by a newline.

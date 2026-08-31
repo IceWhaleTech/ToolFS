@@ -185,13 +185,15 @@ func TestControlView_FiltersByCurrentGrants(t *testing.T) {
 	}
 }
 
-// 用户数据不得遮蔽保留名。
+// 用户数据不得遮蔽保留名：一个 grant 的视图路径若产生 .toolfs / .toolfs-state
+// 顶层段，必须被 sanitize 丢弃，不能进入命名空间遮蔽控制视图/保护区。
 func TestControlView_ReservedNameCannotBeShadowed(t *testing.T) {
+	// /media/.toolfs → 视图顶层段 ".toolfs"；/media/.toolfs-state 同理。
 	view, err := BuildInstanceView(
 		&ZimaIdentity{Username: "alice", UserID: 1001},
 		NewAccessSnapshot("alice", 1001, "user", []Grant{
-			{ID: 1, Name: toolfsControlDir, Path: "/tmp/whatever"},
-			{ID: 2, Name: toolfsStateDir, Path: "/tmp/whatever2"},
+			{ID: 1, Path: "/media/" + toolfsControlDir},
+			{ID: 2, Path: "/media/" + toolfsStateDir},
 		}, 1),
 		AgentCapabilities{},
 	)
@@ -199,8 +201,11 @@ func TestControlView_ReservedNameCannotBeShadowed(t *testing.T) {
 		t.Fatalf("构建视图: %v", err)
 	}
 	for _, reserved := range []string{toolfsControlDir, toolfsStateDir} {
-		if _, ok := view.Entry(reserved); ok {
-			t.Errorf("名为 %q 的 Grant 进入了命名空间，可遮蔽保留名", reserved)
+		if hasEntry(view, reserved) {
+			t.Errorf("视图路径含 %q 段的 Grant 进入了命名空间，可遮蔽保留名", reserved)
 		}
+	}
+	if len(view.Entries()) != 0 {
+		t.Errorf("保留名 grant 应被全部丢弃，实际顶层: %v", view.Entries())
 	}
 }

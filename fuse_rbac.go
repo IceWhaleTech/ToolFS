@@ -35,6 +35,9 @@ type MountHandle interface {
 	MountPoint() string
 	// Identity is the ZimaOS subject this mount is bound to.
 	Identity() *ZimaIdentity
+	// View is the live InstanceView this mount serves, so the mount set can
+	// reproject it in place when the authority's grants change.
+	View() *InstanceView
 	// Unmount tears the mount down and releases descriptors. Idempotent.
 	Unmount() error
 	// Wait blocks until the mount is torn down.
@@ -81,6 +84,7 @@ type mountHandle struct {
 
 func (h *mountHandle) MountPoint() string      { return h.mountPoint }
 func (h *mountHandle) Identity() *ZimaIdentity { return h.identity }
+func (h *mountHandle) View() *InstanceView     { return h.view }
 func (h *mountHandle) Wait()                   { h.server.Wait() }
 
 // Unmount is safe to call repeatedly; the second call is a no-op.
@@ -226,22 +230,104 @@ func (r *instanceRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		return r.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
-	entry, ok := r.view.Entry(name)
+	node, ok := r.view.rootChild(name)
 	if !ok {
 		return nil, syscall.ENOENT
 	}
-	if !r.view.Allows(entry, "", OpList) {
-		return nil, syscall.ENOENT
-	}
+	return childInode(ctx, &r.Inode, r.view, node, out)
+}
 
-	child := &instanceDir{view: r.view, entry: entry, rel: ""}
+// childInode builds the FUSE inode for a resolved view-tree child. A grant node
+// becomes a host-backed directory; a synthetic node becomes a traversal-only
+// directory that lists only its granted descendants.
+func childInode(
+	ctx context.Context,
+	parent *gofs.Inode,
+	view *InstanceView,
+	node *viewNode,
+	out *fuse.EntryOut,
+) (*gofs.Inode, syscall.Errno) {
 	out.SetEntryTimeout(0)
 	out.SetAttrTimeout(0)
-	out.Mode = syscall.S_IFDIR | entryMode(entry)
-	if info, err := entry.root.Stat(""); err == nil {
-		stampAttrTimes(&out.Attr, info)
+	if node.entry != nil {
+		entry := node.entry
+		if entry.fileName != "" {
+			// A grant on a single file: the leaf is the file itself, served from
+			// the parent root under fileName. Its decision key is the full path,
+			// so Allows uses fileName as the relative path (HostPath is the
+			// parent for a file grant).
+			if !view.Allows(entry, entry.fileName, OpRead) {
+				return nil, syscall.ENOENT
+			}
+			child := &instanceFile{view: view, entry: entry, rel: entry.fileName}
+			out.Mode = syscall.S_IFREG | fileMode(entry)
+			if info, err := entry.root.Stat(entry.fileName); err == nil {
+				out.Size = uint64(info.Size())
+				stampAttrTimes(&out.Attr, info)
+			}
+			return parent.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFREG}), 0
+		}
+		if !view.Allows(entry, "", OpList) {
+			return nil, syscall.ENOENT
+		}
+		child := &instanceDir{view: view, entry: entry, rel: ""}
+		out.Mode = syscall.S_IFDIR | entryMode(entry)
+		if info, err := entry.root.Stat(""); err == nil {
+			stampAttrTimes(&out.Attr, info)
+		}
+		return parent.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
-	return r.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	child := &synthDir{view: view, node: node}
+	out.Mode = syscall.S_IFDIR | 0o555
+	stampVirtualTimes(&out.Attr, view)
+	return parent.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
+}
+
+// synthDir is a synthetic, traversal-only directory: one of the path components
+// the alias table places above a grant (/Home, an owner name, /ZimaOS-HD). It
+// has no host backing, so it lists only its children in the view tree — never a
+// real directory — and grants nothing itself. Every actual permission decision
+// still happens at the grant leaves it leads to.
+type synthDir struct {
+	gofs.Inode
+	view *InstanceView
+	node *viewNode
+}
+
+var (
+	_ gofs.NodeReaddirer = (*synthDir)(nil)
+	_ gofs.NodeLookuper  = (*synthDir)(nil)
+	_ gofs.NodeGetattrer = (*synthDir)(nil)
+)
+
+func (d *synthDir) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = syscall.S_IFDIR | 0o555
+	stampVirtualTimes(&out.Attr, d.view)
+	out.SetTimeout(d.view.CacheTimeout)
+	return 0
+}
+
+func (d *synthDir) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errno) {
+	names := d.node.childNames()
+	entries := make([]fuse.DirEntry, 0, len(names))
+	for _, name := range names {
+		mode := uint32(syscall.S_IFDIR)
+		// A child that is a grant on a single file lists as a regular file, not
+		// a directory; everything else is a directory (a grant dir or synthetic).
+		if child, ok := d.node.child(name); ok && child.entry != nil && child.entry.fileName != "" {
+			mode = syscall.S_IFREG
+		}
+		entries = append(entries, fuse.DirEntry{Name: name, Mode: mode})
+	}
+	return gofs.NewListDirStream(entries), 0
+}
+
+func (d *synthDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofs.Inode, syscall.Errno) {
+	child, ok := d.node.child(name)
+	if !ok {
+		return nil, syscall.ENOENT
+	}
+	return childInode(ctx, &d.Inode, d.view, child, out)
 }
 
 // instanceDir is a directory beneath one grant.
@@ -275,6 +361,12 @@ func (d *instanceDir) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errn
 		if isReservedRel(childRel) {
 			continue
 		}
+		// A child the alias table relocates elsewhere is not shown here: .home
+		// under a /DATA grant belongs to /Home, so /ZimaOS-HD must not also
+		// expose it. Its canonical location lists it.
+		if d.view.childDiverges(d.entry, d.rel, item.Name()) {
+			continue
+		}
 		// Hide anything the current grants do not cover, so a nested
 		// read-only or denied subtree is not even enumerated.
 		if !d.view.Allows(d.entry, childRel, OpRead) {
@@ -292,6 +384,11 @@ func (d *instanceDir) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errn
 func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofs.Inode, syscall.Errno) {
 	childRel := joinRel(d.rel, name)
 	if isReservedRel(childRel) {
+		return nil, syscall.ENOENT
+	}
+	// Relocated by the alias table (e.g. .home under /DATA → /Home): not
+	// reachable here, only at its canonical view path.
+	if d.view.childDiverges(d.entry, d.rel, name) {
 		return nil, syscall.ENOENT
 	}
 	if !d.view.Allows(d.entry, childRel, OpRead) {
