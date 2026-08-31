@@ -2353,3 +2353,8 @@ Linux 真机全量 PASS。
   排除**。不做这一步，被删内容可经其他通路读回——这是 §15.2 第 7 条那个设计修正
   带来的连带要求，必须在联调清单里
 
+**Agent 收窄的两处已知边界**（收窄本身已落地：`permission_provider.go` 按 `agent:<userId>:<app>` 快照投影，读/写由 `allowedOps` 落地；见 UserService `docs/rbac-design.md` §7.3）：
+
+- **视图随 generation 实时重投影（原「挂载时绑定」的活性局限，已解决）**：`handleChange` 现在除重热决策外，还调 `MountSet.Reproject` 逐挂载重建视图——重跑 `BuildInstanceViewForIdentity`（内含 `GrantsFor` 的 user↔agent **主体重选**）得到当前授权的新树，受 `InstanceView.mu`（RWMutex）保护地**原地换进同一个 `InstanceView`**（FUSE 节点持有的指针不变、无需重挂），旧 grant 句柄宽限期后关闭；授权集未变则 no-op。因此**授权增删、首次给运行中实例加收窄、以及别人撤销给你的分享，都实时生效、无需重挂**，撤销分享后也不再残留幽灵祖先目录。（blue 早前的「保存 scope 后主动 release 重挂」因此退为冗余的兜底。）叶子的读/写/删决策一直是实时的（`allowedOps` 按 generation 自失效）；本改动补上的是**视图树结构**的实时性。
+- **空白名单无法表达「什么都不给」（表达力缺口）**：主体选择的判据是「agent 快照有 ≥1 条 path-read 授权 ⇒ 投影 agent、收窄；否则 ⇒ 回退用户全量视图」。故清空 agent 授权读作「未收窄」→ 全量，而非「锁死」。要把 agent 关到零访问，需另给信号（如一条显式的空 scope 标记），当前模型表达不了。
+
