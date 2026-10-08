@@ -301,3 +301,26 @@ func TestMutate_RandomOffsetWrites(t *testing.T) {
 		t.Errorf("偏移写入的内容不正确：头 %q 尾 %q", got[:4], got[8192:])
 	}
 }
+
+// 同目录改名只需要写：默认不授予删除时也能改名；跨目录移动仍然需要删除。
+func TestMutate_RenameInPlaceNeedsOnlyWrite(t *testing.T) {
+	mnt, _, cleanup := mountWritable(t, AgentCapabilities{})
+	defer cleanup()
+
+	dir := filepath.Join(mnt, "Documents")
+	if err := os.WriteFile(filepath.Join(dir, "draft.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("准备文件: %v", err)
+	}
+	if err := os.Rename(filepath.Join(dir, "draft.txt"), filepath.Join(dir, "final.txt")); err != nil {
+		t.Errorf("同目录改名失败了——它不丢任何东西，只要写权限: %v", err)
+	}
+	if err := os.Rename(filepath.Join(dir, "final.txt"), filepath.Join(dir, "file.txt")); err == nil {
+		t.Error("改名覆盖了已有文件——覆盖需要删除权限")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("准备子目录: %v", err)
+	}
+	if err := os.Rename(filepath.Join(dir, "final.txt"), filepath.Join(dir, "sub", "final.txt")); err == nil {
+		t.Error("跨目录移动成功了——源目录里的条目消失，需要删除权限")
+	}
+}

@@ -150,7 +150,7 @@ func (d *instanceDir) trash(childRel string) syscall.Errno {
 	return 0
 }
 
-// Rename moves an entry within the same grant.
+// Rename moves an entry within the same grant, under renameRequirement.
 //
 // Cross-grant renames are refused with EXDEV. The two grants may carry
 // different permissions and even live on different filesystems, and the kernel
@@ -172,16 +172,25 @@ func (d *instanceDir) Rename(ctx context.Context, name string, newParent gofs.In
 	if !d.writable() {
 		return syscall.EROFS
 	}
-	// A rename removes the source name, so it needs the same right as deletion.
-	if !d.view.Caps.AllowDelete {
+
+	_, statErr := d.entry.root.Stat(newRel)
+	overwrite := statErr == nil
+	need := renameRequirement(d.rel == target.rel, overwrite)
+	if (need.DeleteSource || need.DeleteTarget) && !d.view.Caps.AllowDelete {
 		return syscall.EPERM
 	}
-	if !d.view.Allows(d.entry, oldRel, OpDelete) || !d.view.Allows(d.entry, newRel, OpCreate) {
+	if need.DeleteSource && !d.view.Allows(d.entry, oldRel, OpDelete) {
+		return syscall.EACCES
+	}
+	if need.DeleteTarget && !d.view.Allows(d.entry, newRel, OpDelete) {
+		return syscall.EACCES
+	}
+	if !d.view.Allows(d.entry, newRel, OpCreate) {
 		return syscall.EACCES
 	}
 
 	// Overwriting an existing target destroys its content; preserve it first.
-	if _, err := d.entry.root.Stat(newRel); err == nil {
+	if overwrite {
 		if _, err := d.entry.protection.CaptureVersion(d.view.Identity.Username, newRel); err != nil {
 			return errnoFor(err)
 		}
