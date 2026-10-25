@@ -25,7 +25,7 @@ func mountTwoUsers(t *testing.T) (aliceMnt, bobMnt string, cleanup func()) {
 	requireFUSE(t)
 
 	base, resolver, provider := twoUserFixture(t)
-	_ = base
+	caps := capsBase(base)
 
 	mntBase := t.TempDir()
 	aliceMnt = filepath.Join(mntBase, "u1001", "workspace")
@@ -37,11 +37,11 @@ func mountTwoUsers(t *testing.T) (aliceMnt, bobMnt string, cleanup func()) {
 	}
 
 	ctx := context.Background()
-	aliceHandle, err := MountForIdentity(ctx, resolver, provider, "agent-user-1", "", aliceMnt, AgentCapabilities{}, MountConfig{})
+	aliceHandle, err := MountForIdentity(ctx, resolver, provider, "agent-user-1", "", aliceMnt, caps, MountConfig{})
 	if err != nil {
 		t.Skipf("跳过：本环境无法挂载 FUSE (%v)", err)
 	}
-	bobHandle, err := MountForIdentity(ctx, resolver, provider, "agent-user-2", "", bobMnt, AgentCapabilities{}, MountConfig{})
+	bobHandle, err := MountForIdentity(ctx, resolver, provider, "agent-user-2", "", bobMnt, caps, MountConfig{})
 	if err != nil {
 		_ = aliceHandle.Unmount()
 		t.Skipf("跳过：本环境无法挂载 FUSE (%v)", err)

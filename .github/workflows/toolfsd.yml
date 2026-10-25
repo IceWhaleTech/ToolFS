@@ -1,0 +1,140 @@
+name: Build toolfsd
+
+on:
+  push:
+    branches:
+      - feat/authority-permissions
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolfsd-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      GOPRIVATE: github.com/IceWhaleTech/*
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate build secrets and configure private Go dependency access
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.API_TOKEN_GITHUB }}
+          OSS_KEY_ID: ${{ secrets.OSS_KEY_ID }}
+          OSS_KEY_SECRET: ${{ secrets.OSS_KEY_SECRET }}
+        run: |
+          missing=()
+          for name in API_TOKEN_GITHUB OSS_KEY_ID OSS_KEY_SECRET; do
+            if [[ -z "${!name}" ]]; then missing+=("$name"); fi
+          done
+          if [[ ${#missing[@]} -ne 0 ]]; then
+            echo "::error::Configure these Actions Secrets: ${missing[*]}. API_TOKEN_GITHUB needs read access to IceWhaleTech/ZimaOS-Common."
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${API_TOKEN_GITHUB}@github.com/".insteadOf "https://github.com/"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install FUSE test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes fuse3
+          sudo modprobe fuse
+          test -c /dev/fuse
+          sudo chmod a+rw /dev/fuse
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with the race detector and real FUSE mounts
+        run: |
+          go test -race -json -timeout 10m ./... | tee "$RUNNER_TEMP/toolfsd-tests.jsonl"
+          python3 - "$RUNNER_TEMP/toolfsd-tests.jsonl" <<'PY'
+          import json
+          import sys
+
+          required = {"TestMount_EachUserSeesOnlyOwnDirectories", "TestControl_MountAndUnmountLifecycle"}
+          with open(sys.argv[1]) as results:
+              passed = {event.get("Test") for line in results if (event := json.loads(line)).get("Action") == "pass"}
+          missing = required - passed
+          if missing:
+              raise SystemExit("Required FUSE tests did not pass (possibly skipped): " + ", ".join(sorted(missing)))
+          PY
+
+      - name: Build Linux amd64 and arm64 installation packages
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.3
+          args: ${{ startsWith(github.ref, 'refs/tags/') && 'release --clean --skip=publish' || 'release --snapshot --clean' }}
+
+      - name: Verify packages and exercise the native daemon
+        run: bash scripts/smoke-toolfsd.sh dist
+
+      - name: Choose OSS destination
+        id: destination
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          prefix="$GITHUB_REPOSITORY/actions/$GITHUB_RUN_ID/toolfsd"
+          if [[ "$REF_TYPE" == tag ]]; then
+            prefix="$GITHUB_REPOSITORY/releases/download/$TAG_NAME"
+          fi
+          {
+            echo "prefix=$prefix"
+            echo 'assets<<TOOLFSD_ASSETS'
+            for package in dist/*.tar.gz dist/checksums.txt; do
+              printf '%s:/%s/%s\n' "$package" "$prefix" "${package##*/}"
+            done
+            echo 'TOOLFSD_ASSETS'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload packages and checksums to OSS
+        uses: IceWhaleTech/oss-action@v1.0.4
+        with:
+          key-id: ${{ secrets.OSS_KEY_ID }}
+          key-secret: ${{ secrets.OSS_KEY_SECRET }}
+          region: oss-cn-shanghai
+          bucket: casaos
+          show-progress: "true"
+          assets: ${{ steps.destination.outputs.assets }}
+
+      - name: Add download links to the workflow summary
+        env:
+          OSS_PREFIX: ${{ steps.destination.outputs.prefix }}
+        run: |
+          base_url="https://casaos.oss-cn-shanghai.aliyuncs.com/$OSS_PREFIX"
+          {
+            printf 'toolfsd packages (%s)\n\n' "$GITHUB_SHA"
+            for package in dist/*.tar.gz dist/checksums.txt; do
+              name="${package##*/}"
+              printf -- '- [%s](%s/%s)\n' "$name" "$base_url" "$name"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove dependency credentials
+        if: always()
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.API_TOKEN_GITHUB }}
+        run: |
+          if [[ -n "$API_TOKEN_GITHUB" ]]; then
+            git config --global --unset-all url."https://x-access-token:${API_TOKEN_GITHUB}@github.com/".insteadOf || true
+          fi

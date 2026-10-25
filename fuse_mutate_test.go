@@ -25,6 +25,7 @@ func mountWritable(t *testing.T, caps AgentCapabilities) (mnt, dataBase string, 
 	requireFUSE(t)
 
 	dataBase, resolver, provider := twoUserFixture(t)
+	caps.ViewAliases = capsBase(dataBase).ViewAliases
 
 	mnt = filepath.Join(t.TempDir(), "u1001", "workspace")
 	if err := os.MkdirAll(mnt, 0o755); err != nil {
@@ -195,14 +196,19 @@ func TestMutate_ReadOnlyGrantRejectsWrites(t *testing.T) {
 	if err := os.MkdirAll(mnt, 0o755); err != nil {
 		t.Fatalf("准备挂载点: %v", err)
 	}
+	caps := capsBase(base)
+	caps.AllowDelete = true
 	handle, err := MountForIdentity(context.Background(), resolver, provider,
-		"agent-ro", "", mnt, AgentCapabilities{AllowDelete: true}, MountConfig{})
+		"agent-ro", "", mnt, caps, MountConfig{})
 	if err != nil {
 		t.Skipf("跳过：本环境无法挂载 FUSE (%v)", err)
 	}
 	defer func() { _ = handle.Unmount() }()
 
 	target := filepath.Join(mnt, "ReadOnly", "doc.txt")
+	if content, err := os.ReadFile(target); err != nil || string(content) != "ORIGINAL" {
+		t.Fatalf("只读授权文件不可读: content=%q err=%v", content, err)
+	}
 	if err := os.WriteFile(target, []byte("HACKED"), 0o644); err == nil {
 		t.Error("只读 Grant 上写入成功了")
 	}

@@ -1,0 +1,41 @@
+version: 2
+
+project_name: toolfsd
+
+builds:
+  - id: toolfsd
+    main: ./cmd/toolfsd
+    binary: build/sysroot/usr/bin/toolfsd
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - netgo
+      - osusergo
+    ldflags:
+      - -s -w
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: toolfsd
+    ids:
+      - toolfsd
+    name_template: "{{ .Os }}-{{ .Arch }}-{{ .ProjectName }}-v{{ .Version }}"
+    files:
+      - build/**/*
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ .Version }}-snapshot.{{ .ShortCommit }}"
+
+release:
+  disable: true
+
+changelog:
+  disable: true

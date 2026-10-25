@@ -21,10 +21,10 @@ func newControlFixture(t *testing.T) (client *http.Client, baseURL string, mount
 	t.Helper()
 	requireFUSE(t)
 
-	_, resolver, provider := twoUserFixture(t)
+	base, resolver, provider := twoUserFixture(t)
 
 	root := filepath.Join(t.TempDir(), "mnt")
-	mounts, err := NewMountSet(MountSetConfig{Root: root}, resolver, provider)
+	mounts, err := NewMountSet(MountSetConfig{Root: root, DefaultCaps: capsBase(base)}, resolver, provider)
 	if err != nil {
 		t.Fatalf("建 MountSet: %v", err)
 	}

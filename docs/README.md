@@ -4,6 +4,7 @@
 
 | 文档 | 用途 | 篇幅 |
 |---|---|---|
+| [`toolfsd-build.md`](toolfsd-build.md) | toolfsd 的 GitHub Actions、双架构安装包和 systemd 配置 | ~5 分钟读完 |
 | **[`rbac-v1-alignment.md`](rbac-v1-alignment.md)** | **业务需求 v0.3 与技术实现的对齐**。统一权限模型、三方各自要做的事、阻塞项 | ~10 分钟读完 |
 | **[`review-brief.md`](review-brief.md)** | **团队评审用**。决策、取舍、范围、风险与待拍板问题，不含实现细节 | ~15 分钟读完 |
 | [`design-rbac-snapshot.md`](design-rbac-snapshot.md) | 完整设计稿 v7 + **§15 实现进展** | 约 2280 行 |

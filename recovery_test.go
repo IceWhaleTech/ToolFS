@@ -22,9 +22,11 @@ func mountForRecovery(t *testing.T, sessionID, taskID string) (mnt, dataBase str
 	requireFUSE(t)
 
 	dataBase, resolver, provider := twoUserFixture(t)
+	caps := capsBase(dataBase)
+	caps.AllowDelete = true
 
 	built, err := BuildInstanceViewForUser(context.Background(), resolver, provider,
-		"agent-user-1", "", AgentCapabilities{AllowDelete: true})
+		"agent-user-1", "", caps)
 	if err != nil {
 		t.Fatalf("构建视图: %v", err)
 	}
@@ -248,7 +250,9 @@ func TestRecovery_RevokedGrantBlocksRestore(t *testing.T) {
 	}
 
 	// 模拟撤权：换成一个不含该路径的授权快照
+	view.mu.Lock()
 	view.Access = NewAccessSnapshot(view.Identity.Username, view.Identity.UserID, "user", nil, 99)
+	view.mu.Unlock()
 
 	if _, err := view.ListRestorePoints("Documents/file.txt"); err == nil {
 		t.Error("撤权后仍能列出恢复点")

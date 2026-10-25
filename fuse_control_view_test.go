@@ -174,7 +174,9 @@ func TestControlView_FiltersByCurrentGrants(t *testing.T) {
 	}
 
 	// 撤销全部授权
+	view.mu.Lock()
 	view.Access = NewAccessSnapshot(view.Identity.Username, view.Identity.UserID, "user", nil, 99)
+	view.mu.Unlock()
 
 	after := readControlLines(t, mnt, controlChanges)
 	if len(after) != 0 {

@@ -8,3 +8,5 @@ docs/*.zip
 # Go 构建与测试产物
 *.test
 /toolfsd
+/dist/
+/build/sysroot/usr/bin/toolfsd
