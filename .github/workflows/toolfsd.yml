@@ -85,8 +85,8 @@ jobs:
           version: v2.18.3
           args: ${{ startsWith(github.ref, 'refs/tags/') && 'release --clean --skip=publish' || 'release --snapshot --clean' }}
 
-      - name: Verify packages and exercise the native daemon
-        run: bash scripts/smoke-toolfsd.sh dist
+      - name: Verify packages and the default mount root on a read-only system
+        run: sudo -n bash scripts/smoke-toolfsd-readonly.sh dist
 
       - name: Choose OSS destination
         id: destination

@@ -8,7 +8,7 @@
 //
 // Typical invocation:
 //
-//	toolfsd -root /mnt/toolfs -socket /run/toolfs/toolfsd.sock -bindings /etc/toolfs/bindings.json
+//	zimaos-toolfsd -root /run/toolfs/mounts -socket /run/toolfs/toolfsd.sock
 package main
 
 import (
@@ -26,11 +26,11 @@ import (
 
 func main() {
 	var (
-		root         = flag.String("root", "/mnt/toolfs", "directory under which per-user mount points are created")
+		root         = flag.String("root", "/run/toolfs/mounts", "directory under which per-user mount points are created")
 		socketPath   = flag.String("socket", "/run/toolfs/toolfsd.sock", "unix socket for the control API")
 		bindingsPath = flag.String("bindings", "", "JSON file mapping agent accounts to ZimaOS users")
-		runtimePath  = flag.String("runtime-path", "/run/zimaos", "directory where ZimaOS services publish their addresses")
-		cachePath    = flag.String("permission-cache", "/var/lib/toolfs/permission-cache.json", "where authorization snapshots persist across restarts (empty disables)")
+		runtimePath  = flag.String("runtime-path", "/var/run/casaos", "directory where ZimaOS services publish their addresses")
+		cachePath    = flag.String("permission-cache", "/var/lib/casaos/toolfs/permission-cache.json", "where authorization snapshots persist across restarts (empty disables)")
 		allowDelete  = flag.Bool("allow-delete", false, "grant delete on read-write grants (withheld by default)")
 		fallbackUser = flag.String("fallback-user", "", "ZimaOS username used for unbound agent accounts (transition mode)")
 		fallbackUID  = flag.Int("fallback-uid", 0, "ZimaOS numeric uid paired with -fallback-user")
@@ -85,8 +85,7 @@ func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
 
 	log.Printf("toolfsd: serving control API on %s, mount root %s", socketPath, root)
 	if !allowDelete {
-		log.Printf("toolfsd: delete is withheld by default; mounts are read-only " +
-			"until the protection chain lands")
+		log.Printf("toolfsd: delete is withheld by default; read/write access follows current authorization")
 	}
 
 	serveErr := make(chan error, 1)
@@ -109,11 +108,10 @@ func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
 	}
 }
 
-// buildResolver wires the identity binding.
+// buildResolver wires optional legacy identity bindings.
 //
-// The binding is required because the agent and ZimaOS run independent account
-// systems: agent requests carry no ZimaOS credential, so the mapping has to be
-// stated explicitly rather than derived from a token.
+// A trusted control client can supply the identity from its verified ZimaOS
+// token. Static bindings are only needed for requests without that identity.
 func buildResolver(bindingsPath, fallbackUser string, fallbackUID int) (toolfs.IdentityResolver, error) {
 	bindings := make(map[string]toolfs.ZimaIdentity)
 
@@ -139,8 +137,7 @@ func buildResolver(bindingsPath, fallbackUser string, fallbackUID int) (toolfs.I
 			"account resolves to ZimaOS user %q, so users are NOT isolated from "+
 			"each other", fallbackUser)
 	} else if len(bindings) == 0 {
-		log.Printf("toolfsd: no bindings and no fallback configured; every mount " +
-			"request will be refused until accounts are bound")
+		log.Printf("toolfsd: no legacy bindings configured; mount requests must supply a ZimaOS identity")
 	}
 
 	return resolver, nil

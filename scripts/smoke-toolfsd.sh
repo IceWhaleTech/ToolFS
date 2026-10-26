@@ -31,9 +31,11 @@ for arch in amd64 arm64; do
   test -s "$unit"
   grep -Eq '^ExecStart=/usr/bin/zimaos-toolfsd ' "$unit"
   grep -Fxq 'EnvironmentFile=-/etc/casaos/zimaos-toolfsd.env' "$unit"
+  grep -Fxq 'Environment=TOOLFSD_ROOT=/run/toolfs/mounts' "$unit"
   test -s "$sysroot/usr/lib/modules-load.d/zimaos-toolfsd.conf"
   test -s "$sysroot/usr/share/licenses/zimaos-toolfsd/LICENSE"
   test -s "$sysroot/etc/casaos/zimaos-toolfsd.env.sample"
+  grep -Fxq 'TOOLFSD_ROOT=/run/toolfs/mounts' "$sysroot/etc/casaos/zimaos-toolfsd.env.sample"
   test ! -e "$sysroot/etc/casaos/zimaos-toolfsd.env"
   python3 - "$binary" "$arch" <<'PY'
 import sys
@@ -58,7 +60,11 @@ binary="$test_dir/$native_arch/build/sysroot/usr/bin/zimaos-toolfsd"
 test -c /dev/fuse
 mkdir -p "$test_dir/runtime"
 socket="$test_dir/toolfsd.sock"
-"$binary" -root "$test_dir/mounts" -socket "$socket" \
+root_args=(-root "$test_dir/mounts")
+if [[ "${TOOLFSD_TEST_DEFAULT_ROOT:-0}" == 1 ]]; then
+  root_args=()
+fi
+"$binary" "${root_args[@]}" -socket "$socket" \
   -runtime-path "$test_dir/runtime" -permission-cache "" \
   > "$test_dir/server.log" 2>&1 &
 server_pid=$!
@@ -72,6 +78,10 @@ for ((attempt = 0; attempt < 50; attempt++)); do
   sleep 0.1
 done
 [[ "$ready" == true ]]
+if [[ "${TOOLFSD_TEST_DEFAULT_ROOT:-0}" == 1 ]]; then
+  test -d /run/toolfs/mounts
+  test ! -e /mnt/toolfs
+fi
 python3 - "$test_dir/health.json" <<'PY'
 import json
 import sys

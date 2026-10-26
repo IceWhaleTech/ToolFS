@@ -57,7 +57,7 @@ build/sysroot/
 
 | 配置 | 默认值 |
 | --- | --- |
-| 挂载根目录 | `/mnt/toolfs` |
+| 挂载根目录 | `/run/toolfs/mounts` |
 | control socket | `/run/toolfs/toolfsd.sock`，权限 `0600` |
 | ZimaOS 服务地址目录 | `/var/run/casaos` |
 | 权限缓存 | `/var/lib/casaos/toolfs/permission-cache.json` |
@@ -65,6 +65,7 @@ build/sysroot/
 
 配置样例随包提供，升级不会覆盖管理员的运行配置。服务保持宿主机挂载命名空间，
 让 Agent Management 能将挂载的父目录以 `rslave` 绑定进实例容器。
+挂载根位于可写的 `/run`，避免在只读系统镜像的 `/mnt` 下创建目录。
 `/run/toolfs` 在服务停止或重启时保留，避免删除 Agent Management 在同一目录下管理的实例 socket。
 Agent Management 提交已验证的 ZimaOS 身份时，无需额外的账号绑定文件；未提供身份且未配置绑定的请求会被拒绝。
 
@@ -79,7 +80,10 @@ go test -race -timeout 10m ./...
 goreleaser check
 goreleaser release --snapshot --clean
 bash scripts/smoke-toolfsd.sh dist
+sudo bash scripts/smoke-toolfsd-readonly.sh dist
 ```
 
 包检查会验证两个架构、静态链接和校验和，并启动本机架构的 daemon，检查
 control API、socket 权限、未绑定账号拒绝和正常退出后的 socket 清理。
+CI 还会在独立挂载命名空间内将 `/mnt` 设为只读、将 `/run` 设为可写，
+不传 `-root` 启动 daemon，验证真实默认路径适用于只读系统镜像。

@@ -13,7 +13,8 @@ RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 StateDirectory=casaos/toolfs
 StateDirectoryMode=0700
-Environment=TOOLFSD_ROOT=/mnt/toolfs
+# Mount points must live on writable storage even when / is read-only squashfs.
+Environment=TOOLFSD_ROOT=/run/toolfs/mounts
 Environment=TOOLFSD_SOCKET=/run/toolfs/toolfsd.sock
 Environment=TOOLFSD_RUNTIME_PATH=/var/run/casaos
 Environment=TOOLFSD_PERMISSION_CACHE=/var/lib/casaos/toolfs/permission-cache.json
