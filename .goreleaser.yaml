@@ -1,11 +1,11 @@
 version: 2
 
-project_name: toolfsd
+project_name: zimaos-toolfsd
 
 builds:
-  - id: toolfsd
+  - id: zimaos-toolfsd
     main: ./cmd/toolfsd
-    binary: build/sysroot/usr/bin/toolfsd
+    binary: build/sysroot/usr/bin/zimaos-toolfsd
     env:
       - CGO_ENABLED=0
     tags:
@@ -20,13 +20,15 @@ builds:
       - arm64
 
 archives:
-  - id: toolfsd
+  - id: zimaos-toolfsd
     ids:
-      - toolfsd
+      - zimaos-toolfsd
     name_template: "{{ .Os }}-{{ .Arch }}-{{ .ProjectName }}-v{{ .Version }}"
     files:
       - build/**/*
       - LICENSE
+      - src: LICENSE
+        dst: build/sysroot/usr/share/licenses/zimaos-toolfsd/LICENSE
 
 checksum:
   name_template: checksums.txt

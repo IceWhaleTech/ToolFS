@@ -9,4 +9,4 @@ docs/*.zip
 *.test
 /toolfsd
 /dist/
-/build/sysroot/usr/bin/toolfsd
+/build/sysroot/usr/bin/zimaos-toolfsd

@@ -20,17 +20,21 @@ trap cleanup EXIT
 (cd "$dist" && sha256sum --check checksums.txt)
 
 for arch in amd64 arm64; do
-  packages=("$dist"/linux-"$arch"-toolfsd-v*.tar.gz)
+  packages=("$dist"/linux-"$arch"-zimaos-toolfsd-v*.tar.gz)
   [[ ${#packages[@]} -eq 1 && -f "${packages[0]}" ]]
   mkdir -p "$test_dir/$arch"
   tar -xzf "${packages[0]}" -C "$test_dir/$arch"
   sysroot="$test_dir/$arch/build/sysroot"
-  binary="$sysroot/usr/bin/toolfsd"
+  binary="$sysroot/usr/bin/zimaos-toolfsd"
   test -x "$binary"
-  test -s "$sysroot/usr/lib/systemd/system/toolfsd.service"
-  test -s "$sysroot/usr/lib/modules-load.d/toolfsd.conf"
-  test -s "$sysroot/etc/casaos/toolfsd.env.sample"
-  test ! -e "$sysroot/etc/casaos/toolfsd.env"
+  unit="$sysroot/usr/lib/systemd/system/zimaos-toolfsd.service"
+  test -s "$unit"
+  grep -Eq '^ExecStart=/usr/bin/zimaos-toolfsd ' "$unit"
+  grep -Fxq 'EnvironmentFile=-/etc/casaos/zimaos-toolfsd.env' "$unit"
+  test -s "$sysroot/usr/lib/modules-load.d/zimaos-toolfsd.conf"
+  test -s "$sysroot/usr/share/licenses/zimaos-toolfsd/LICENSE"
+  test -s "$sysroot/etc/casaos/zimaos-toolfsd.env.sample"
+  test ! -e "$sysroot/etc/casaos/zimaos-toolfsd.env"
   python3 - "$binary" "$arch" <<'PY'
 import sys
 with open(sys.argv[1], "rb") as binary:
@@ -49,7 +53,7 @@ case "$(uname -m)" in
   aarch64|arm64) native_arch=arm64 ;;
   *) echo "No native daemon smoke test for this host architecture" >&2; exit 1 ;;
 esac
-binary="$test_dir/$native_arch/build/sysroot/usr/bin/toolfsd"
+binary="$test_dir/$native_arch/build/sysroot/usr/bin/zimaos-toolfsd"
 "$binary" -h > "$test_dir/help.txt" 2>&1
 test -c /dev/fuse
 mkdir -p "$test_dir/runtime"

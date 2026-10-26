@@ -1,5 +1,5 @@
 [Unit]
-Description=ToolFS Mount Authority
+Description=ZimaOS ToolFS Mount Authority
 Wants=zimaos-user.service zimaos-local-storage.service zimaos-message-bus.service
 After=systemd-modules-load.service zimaos-user.service zimaos-local-storage.service zimaos-message-bus.service
 RequiresMountsFor=/var/lib/casaos/toolfs
@@ -18,8 +18,8 @@ Environment=TOOLFSD_SOCKET=/run/toolfs/toolfsd.sock
 Environment=TOOLFSD_RUNTIME_PATH=/var/run/casaos
 Environment=TOOLFSD_PERMISSION_CACHE=/var/lib/casaos/toolfs/permission-cache.json
 Environment=TOOLFSD_BINDINGS=
-EnvironmentFile=-/etc/casaos/toolfsd.env
-ExecStart=/usr/bin/toolfsd -root ${TOOLFSD_ROOT} -socket ${TOOLFSD_SOCKET} -runtime-path ${TOOLFSD_RUNTIME_PATH} -permission-cache ${TOOLFSD_PERMISSION_CACHE} -bindings ${TOOLFSD_BINDINGS}
+EnvironmentFile=-/etc/casaos/zimaos-toolfsd.env
+ExecStart=/usr/bin/zimaos-toolfsd -root ${TOOLFSD_ROOT} -socket ${TOOLFSD_SOCKET} -runtime-path ${TOOLFSD_RUNTIME_PATH} -permission-cache ${TOOLFSD_PERMISSION_CACHE} -bindings ${TOOLFSD_BINDINGS}
 # Keep mounts in the host mount namespace so Docker can receive them via rslave.
 PrivateMounts=no
 Restart=on-failure

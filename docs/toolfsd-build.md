@@ -1,8 +1,10 @@
-# toolfsd 构建与安装
+# zimaos-toolfsd 构建与安装
 
 构建配置位于 `feat/authority-permissions` 分支。分支推送会运行
 `.github/workflows/toolfsd.yml`，使用 `go.mod` 声明的 Go 版本，先运行 `go vet`
-和竞态测试，再用 GoReleaser 构建 Linux amd64、arm64 的 `toolfsd`。
+和竞态测试，再用 GoReleaser 从 `cmd/toolfsd` 构建 Linux amd64、arm64 的
+`zimaos-toolfsd`。程序名称、systemd 单元、配置样例和许可证安装位置都由本仓库
+定义，系统构建直接复制发布包中的 `build/sysroot/`。
 CI 安装 FUSE 并要求真实挂载和 control API 的关键测试通过，避免环境缺少 FUSE 时
 测试被跳过而仍显示成功。
 
@@ -20,8 +22,8 @@ CI 安装 FUSE 并要求真实挂载和 control API 的关键测试通过，避�
 
 ```text
 https://casaos.oss-cn-shanghai.aliyuncs.com/IceWhaleTech/ToolFS/actions/<run_id>/toolfsd/
-  linux-amd64-toolfsd-v<version>.tar.gz
-  linux-arm64-toolfsd-v<version>.tar.gz
+  linux-amd64-zimaos-toolfsd-v<version>.tar.gz
+  linux-arm64-zimaos-toolfsd-v<version>.tar.gz
   checksums.txt
 ```
 
@@ -37,18 +39,21 @@ GitHub 可能不显示手动运行入口，当前使用分支推送触发即可�
 
 ```text
 build/sysroot/
-├── etc/casaos/toolfsd.env.sample
+├── etc/casaos/zimaos-toolfsd.env.sample
 └── usr/
-    ├── bin/toolfsd
-    └── lib/
-        ├── modules-load.d/toolfsd.conf
-        └── systemd/system/toolfsd.service
+    ├── bin/zimaos-toolfsd
+    ├── lib/
+    │   ├── modules-load.d/zimaos-toolfsd.conf
+    │   └── systemd/system/zimaos-toolfsd.service
+    └── share/licenses/zimaos-toolfsd/LICENSE
 ```
 
 二进制使用 `CGO_ENABLED=0`，无需安装 libfuse 开发库或动态运行库；目标系统需要
 内核 FUSE、`/dev/fuse` 和 `fusermount3`（或 `fusermount`）。
 
-安装后运行 `systemctl enable --now toolfsd.service`。该服务使用：
+安装后运行 `systemctl enable --now zimaos-toolfsd.service`。ZimaOS 系统构建会统一
+执行 `systemctl preset-all`，通过单元的 `WantedBy=multi-user.target` 启用服务。
+该服务使用：
 
 | 配置 | 默认值 |
 | --- | --- |
@@ -56,7 +61,7 @@ build/sysroot/
 | control socket | `/run/toolfs/toolfsd.sock`，权限 `0600` |
 | ZimaOS 服务地址目录 | `/var/run/casaos` |
 | 权限缓存 | `/var/lib/casaos/toolfs/permission-cache.json` |
-| 可选运行配置 | `/etc/casaos/toolfsd.env` |
+| 可选运行配置 | `/etc/casaos/zimaos-toolfsd.env` |
 
 配置样例随包提供，升级不会覆盖管理员的运行配置。服务保持宿主机挂载命名空间，
 让 Agent Management 能将挂载的父目录以 `rslave` 绑定进实例容器。

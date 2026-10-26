@@ -1,4 +1,4 @@
-name: Build toolfsd
+name: Build zimaos-toolfsd
 
 on:
   push:
@@ -123,7 +123,7 @@ jobs:
         run: |
           base_url="https://casaos.oss-cn-shanghai.aliyuncs.com/$OSS_PREFIX"
           {
-            printf 'toolfsd packages (%s)\n\n' "$GITHUB_SHA"
+            printf 'zimaos-toolfsd packages (%s)\n\n' "$GITHUB_SHA"
             for package in dist/*.tar.gz dist/checksums.txt; do
               name="${package##*/}"
               printf -- '- [%s](%s/%s)\n' "$name" "$base_url" "$name"
