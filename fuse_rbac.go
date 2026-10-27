@@ -491,10 +491,14 @@ func (f *instanceFile) Open(ctx context.Context, flags uint32) (gofs.FileHandle,
 	// Without caching, FOPEN_DIRECT_IO keeps the kernel from serving a page
 	// cache hit that would survive a revoked grant. With caching deliberately
 	// enabled, that protection moves to event-driven invalidation instead.
-	if f.view.CacheTimeout > 0 {
-		return &instanceFileHandle{file: file, zeroCopy: f.view.ZeroCopyRead}, fuse.FOPEN_KEEP_CACHE, 0
+	handle := &instanceFileHandle{
+		file: file, zeroCopy: f.view.ZeroCopyRead,
+		view: f.view, entry: f.entry, rel: f.rel,
 	}
-	return &instanceFileHandle{file: file, zeroCopy: f.view.ZeroCopyRead}, fuse.FOPEN_DIRECT_IO, 0
+	if f.view.CacheTimeout > 0 {
+		return handle, fuse.FOPEN_KEEP_CACHE, 0
+	}
+	return handle, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // instanceFileHandle streams from the backing file.
@@ -504,6 +508,9 @@ func (f *instanceFile) Open(ctx context.Context, flags uint32) (gofs.FileHandle,
 type instanceFileHandle struct {
 	file     ReadableFile
 	zeroCopy bool
+	view     *InstanceView
+	entry    *NamespaceEntry
+	rel      string
 	// data serves generated content (the control view), which is small and has
 	// no backing descriptor.
 	data []byte
@@ -524,7 +531,8 @@ func (h *instanceFileHandle) Release(ctx context.Context) syscall.Errno {
 	return 0
 }
 
-// Read serves a slice of the snapshot taken at open time.
+// Read re-checks current access before returning bytes or a zero-copy descriptor.
+// Only generated content is a snapshot taken at open time.
 //
 // The returned slice must not exceed len(dest): the kernel sized its reply
 // buffer to exactly that, and handing back more makes the write of the reply
@@ -536,6 +544,9 @@ func (h *instanceFileHandle) Read(ctx context.Context, dest []byte, off int64) (
 	}
 
 	if h.file != nil {
+		if !h.view.Allows(h.entry, h.rel, OpRead) {
+			return nil, syscall.ENOENT
+		}
 		// Zero copy where possible: hand the kernel our descriptor and let it
 		// splice straight from the backing file into the reply, skipping the
 		// bounce through user space entirely.
