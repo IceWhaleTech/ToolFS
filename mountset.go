@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 )
@@ -49,8 +48,10 @@ type MountSet struct {
 	resolver IdentityResolver
 	provider PermissionProvider
 
-	mu     sync.Mutex
-	mounts map[string]*liveMount
+	lifecycleMu sync.Mutex
+	mu          sync.Mutex
+	mounts      map[string]*liveMount
+	mount       func(context.Context, IdentityResolver, PermissionProvider, string, string, string, AgentCapabilities, MountConfig) (MountHandle, error)
 }
 
 type liveMount struct {
@@ -95,6 +96,7 @@ func NewMountSet(config MountSetConfig, resolver IdentityResolver, provider Perm
 		resolver: resolver,
 		provider: provider,
 		mounts:   make(map[string]*liveMount),
+		mount:    MountForIdentity,
 	}, nil
 }
 
@@ -105,6 +107,13 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, identity 
 		return MountInfo{}, errors.New("toolfs: agent user id is required")
 	}
 
+	// Directory preparation and rollback share parents across apps. Serialize
+	// management operations without holding the ledger lock over authority IO.
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return MountInfo{}, err
+	}
 	key := mountKey(agentUserID, app)
 
 	s.mu.Lock()
@@ -139,26 +148,27 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, identity 
 
 	// The bind source differs per (user, app) so each app gets its own mount
 	// point: blue and photos never share a bind source or a FUSE view.
-	bindSource := filepath.Join(s.config.Root, resolved.mountDirName(), app)
-	mountPoint := filepath.Join(bindSource, "workspace")
-	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
-		return MountInfo{}, fmt.Errorf("toolfs: cannot create mount point: %w", err)
-	}
-
-	handle, err := MountForIdentity(ctx, resolver, s.provider, agentUserID, app,
-		mountPoint, effective, s.config.MountOptions)
+	layout, err := mountLayoutFor(s.config.Root, resolved, app)
 	if err != nil {
 		return MountInfo{}, err
+	}
+	if err := s.checkMountLayout(layout); err != nil {
+		return MountInfo{}, err
+	}
+	prepared, err := layout.prepare()
+	if err != nil {
+		return MountInfo{}, errors.Join(err, prepared.rollback())
+	}
+
+	handle, err := s.mount(ctx, resolver, s.provider, agentUserID, app,
+		layout.point, effective, s.config.MountOptions)
+	if err != nil {
+		return MountInfo{}, errors.Join(err, prepared.rollback())
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Another caller may have raced us; keep theirs and drop ours.
-	if existing, ok := s.mounts[key]; ok {
-		_ = handle.Unmount()
-		return s.infoFor(existing), ErrMountExists
-	}
-	live := &liveMount{agentUserID: agentUserID, app: app, handle: handle, bindSource: bindSource}
+	live := &liveMount{agentUserID: agentUserID, app: app, handle: handle, bindSource: layout.bind}
 	s.mounts[key] = live
 	return s.infoFor(live), nil
 }
@@ -204,6 +214,8 @@ func (s *MountSet) Reproject(ctx context.Context) {
 // Unmount tears down one mount and removes its empty runtime directories. A
 // failure stays in the ledger so a later release can finish the operation.
 func (s *MountSet) Unmount(agentUserID, app string) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	key := mountKey(agentUserID, app)
 	s.mu.Lock()
 	defer s.mu.Unlock()
