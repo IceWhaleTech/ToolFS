@@ -73,11 +73,16 @@ type MountConfig struct {
 	ZeroCopyRead bool
 }
 
+type fuseMountServer interface {
+	Unmount() error
+	Wait()
+}
+
 // mountHandle is the concrete MountHandle.
 type mountHandle struct {
 	mountPoint string
 	identity   *ZimaIdentity
-	server     *fuse.Server
+	server     fuseMountServer
 	view       *InstanceView
 	unmounted  bool
 }
@@ -92,10 +97,12 @@ func (h *mountHandle) Unmount() error {
 	if h.unmounted {
 		return nil
 	}
+	if err := h.server.Unmount(); err != nil {
+		return err
+	}
 	h.unmounted = true
-	err := h.server.Unmount()
 	h.view.closeRoots()
-	return err
+	return nil
 }
 
 // MountForIdentity serves a user's authorized namespace at mountPoint.

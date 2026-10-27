@@ -58,6 +58,7 @@ type liveMount struct {
 	app         string
 	handle      MountHandle
 	bindSource  string
+	unmounted   bool
 }
 
 // mountKey composes the map key for a live mount. Mounts are keyed per
@@ -172,7 +173,9 @@ func (s *MountSet) Reproject(ctx context.Context) {
 	s.mu.Lock()
 	live := make([]*liveMount, 0, len(s.mounts))
 	for _, m := range s.mounts {
-		live = append(live, m)
+		if !m.unmounted {
+			live = append(live, m)
+		}
 	}
 	s.mu.Unlock()
 
@@ -186,30 +189,39 @@ func (s *MountSet) Reproject(ctx context.Context) {
 			log.Printf("toolfs: reproject %s/%s: build failed: %v", m.agentUserID, m.app, err)
 			continue
 		}
-		if _, err := view.reproject(fresh); err != nil {
-			log.Printf("toolfs: reproject %s/%s: swap failed: %v", m.agentUserID, m.app, err)
+		// A release may have completed while the authority read was in flight.
+		// Never reopen roots for a mount that has already been torn down.
+		s.mu.Lock()
+		if s.mounts[mountKey(m.agentUserID, m.app)] == m && !m.unmounted {
+			if _, err := view.reproject(fresh); err != nil {
+				log.Printf("toolfs: reproject %s/%s: swap failed: %v", m.agentUserID, m.app, err)
+			}
 		}
+		s.mu.Unlock()
 	}
 }
 
-// Unmount tears down one mount.
-//
-// The mount point directory is intentionally left in place: it is below the
-// stable bind source, and recreating it on the next mount is cheaper than
-// coordinating removal with a consumer that may still have it bound.
+// Unmount tears down one mount and removes its empty runtime directories. A
+// failure stays in the ledger so a later release can finish the operation.
 func (s *MountSet) Unmount(agentUserID, app string) error {
 	key := mountKey(agentUserID, app)
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	live, ok := s.mounts[key]
-	if ok {
-		delete(s.mounts, key)
-	}
-	s.mu.Unlock()
-
 	if !ok {
 		return ErrMountNotFound
 	}
-	return live.handle.Unmount()
+	if !live.unmounted {
+		if err := live.handle.Unmount(); err != nil {
+			return err
+		}
+		live.unmounted = true
+	}
+	if err := s.removeMountDirectories(live); err != nil {
+		return fmt.Errorf("toolfs: clean unmounted instance: %w", err)
+	}
+	delete(s.mounts, key)
+	return nil
 }
 
 // List returns every live mount, ordered for stable output.
@@ -238,12 +250,11 @@ func (s *MountSet) Close() error {
 	for _, m := range s.mounts {
 		live = append(live, m)
 	}
-	s.mounts = make(map[string]*liveMount)
 	s.mu.Unlock()
 
 	var errs []error
 	for _, m := range live {
-		if err := m.handle.Unmount(); err != nil {
+		if err := s.Unmount(m.agentUserID, m.app); err != nil && !errors.Is(err, ErrMountNotFound) {
 			errs = append(errs, fmt.Errorf("%s: %w", m.agentUserID, err))
 		}
 	}

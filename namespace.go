@@ -600,18 +600,21 @@ func (v *InstanceView) reproject(next *InstanceView) (bool, error) {
 	if v == nil || next == nil {
 		return false, nil
 	}
-	if v.sameGrants(next) {
-		return false, nil
-	}
+	same := v.sameGrants(next)
 	// Open the new roots before publishing them; on failure keep the old
 	// projection so a transient error never breaks a live mount.
-	if err := next.openRoots(); err != nil {
-		return false, err
+	if !same {
+		if err := next.openRoots(); err != nil {
+			return false, err
+		}
 	}
 	v.mu.Lock()
 	oldGrants := v.grants
-	v.root = next.root
-	v.grants = next.grants
+	if !same {
+		v.root = next.root
+		v.grants = next.grants
+	}
+	// Even unchanged roots need the new declaration-generation decider.
 	v.Access = next.Access
 	v.Generation = next.Generation
 	v.mu.Unlock()
@@ -623,8 +626,10 @@ func (v *InstanceView) reproject(next *InstanceView) (bool, error) {
 
 	// Release the old descriptors after a grace period. Already-open files hold
 	// their own fds and are unaffected; only an in-flight openat could race.
-	time.AfterFunc(closeGrace, func() { closeGrants(oldGrants) })
-	return true, nil
+	if !same {
+		time.AfterFunc(closeGrace, func() { closeGrants(oldGrants) })
+	}
+	return !same, nil
 }
 
 // sameGrants reports whether two projections grant the same paths at the same

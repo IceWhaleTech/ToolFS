@@ -55,6 +55,10 @@ type PermissionProvider interface {
 type AuthorityPermissionProvider struct {
 	client *permission.Client
 
+	scopeMu         sync.Mutex
+	scopes          map[string]struct{}
+	scopeGeneration int64
+
 	mu sync.Mutex
 	// served maps subject → identity for every snapshot handed out, so a
 	// change event can re-warm exactly the subjects that have live mounts.
@@ -77,19 +81,18 @@ func NewAuthorityPermissionProvider(client *permission.Client) *AuthorityPermiss
 }
 
 // StartAuthorityPermissionProvider builds the client, loads the disk cache and
-// starts following the authority's event stream.
+// starts following the authority's event stream. Path and agent changes both
+// matter: declaring or removing an agent owner can narrow its view without
+// changing any path grant.
 //
 // runtimePath is where the authority publishes its address (the same directory
 // every ZimaOS service consults). cachePath persists snapshots so a restart
-// answers from what it last knew instead of refusing everyone until the
-// authority is up. The subscription is narrowed to the path namespace: every
-// question this package asks is about paths, and the option's contract is that
-// reads stay inside the subscribed namespaces.
+// answers from what it last knew instead of refusing everyone.
 func StartAuthorityPermissionProvider(ctx context.Context, runtimePath, cachePath string) *AuthorityPermissionProvider {
 	provider := &AuthorityPermissionProvider{served: make(map[string]*ZimaIdentity)}
 
 	options := []permission.Option{
-		permission.WithWatchNamespaces(permission.NamespacePath),
+		permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceAgent),
 		permission.WithChangeHandler(provider.handleChange),
 	}
 	if cachePath != "" {
@@ -149,13 +152,10 @@ const homeEntryName = "Home"
 
 // GrantsFor projects the authority's snapshot for one identity.
 //
-// When app is non-empty the agent sub-scope is consulted: the agent subject is
-// "agent:<uid>:<app>". The agent is "scoped" iff it holds any path-read grant
-// of its own. Because the engine already intersects an owned agent with its
-// owner user, a scoped agent snapshot is guaranteed <= the user's, so the agent
-// subject can be projected directly. An UNSCOPED agent (no grants of its own)
-// falls back to the full user view for backward compatibility. A Snapshot error
-// on the agent subject fails closed — it never falls through to the user view.
+// When app is non-empty, an explicitly declared agent always uses its own
+// snapshot, even if it holds no effective read. Only a genuinely undeclared
+// legacy app keeps the user view. Declaration and snapshot errors fail closed;
+// withdrawing access must never promote the identity used by the decider.
 func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error) {
 	if identity == nil {
 		return nil, ErrNoIdentity
@@ -169,18 +169,23 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 		return nil, err
 	}
 
+	userFallback := false
+	var scopeGeneration int64
 	if app != "" {
 		agentSubject := permission.NamespaceAgent + ":" + itoa(identity.UserID) + ":" + app
-		agentSnap, err := p.client.Snapshot(ctx, agentSubject)
+		declared, generation, err := p.agentDeclared(ctx, agentSubject)
 		if err != nil {
-			// Fail closed, never fall through to the full user view on error.
 			return nil, err
 		}
-		// A scoped agent has at least one path-read grant of its own; project
-		// the agent subject in that case. An unscoped agent keeps the user view.
-		if len(agentSnap.Objects(permission.NamespacePath, permission.RelRead)) > 0 {
+		agentSnap, err := p.client.Snapshot(ctx, agentSubject)
+		if err != nil {
+			return nil, err
+		}
+		if declared {
 			subject = agentSubject
 			snapshot = agentSnap
+		} else {
+			userFallback, scopeGeneration = true, generation
 		}
 	}
 
@@ -222,7 +227,10 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 		Role:       identity.Role,
 		Grants:     grants,
 		Generation: uint64(snapshot.Generation),
-		authority:  &authorityDecider{client: p.client, subject: subject},
+		authority: &authorityDecider{
+			client: p.client, subject: subject,
+			userFallback: userFallback, scopeGeneration: scopeGeneration,
+		},
 	}, nil
 }
 
@@ -242,6 +250,11 @@ func (p *AuthorityPermissionProvider) Invalidate(string) {}
 type authorityDecider struct {
 	client  *permission.Client
 	subject string
+	// A legacy user view is valid only for the declaration generation that
+	// proved it unscoped. Re-warming the user must not revive it after an
+	// agent ownership change while re-projection is still pending.
+	userFallback    bool
+	scopeGeneration int64
 }
 
 // generation exposes the client's live generation for decision-memo keying.
@@ -264,6 +277,9 @@ func (d *authorityDecider) generation() int64 {
 // refusal. Fail closed: the alternative reads a cache miss as "no
 // restrictions".
 func (d *authorityDecider) allowedOps(hostPath string, caps AgentCapabilities) AccessOp {
+	if d.userFallback && d.client.Generation() != d.scopeGeneration {
+		return 0
+	}
 	read, known := d.client.Cached(d.subject, permission.NamespacePath, hostPath, permission.RelRead)
 	if !known || !read {
 		return 0
