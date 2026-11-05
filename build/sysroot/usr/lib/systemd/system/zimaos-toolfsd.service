@@ -18,9 +18,10 @@ Environment=TOOLFSD_ROOT=/run/toolfs/mounts
 Environment=TOOLFSD_SOCKET=/run/toolfs/toolfsd.sock
 Environment=TOOLFSD_RUNTIME_PATH=/var/run/casaos
 Environment=TOOLFSD_PERMISSION_CACHE=/var/lib/casaos/toolfs/permission-cache.json
+Environment=TOOLFSD_CONTAINER_UID=65534
 Environment=TOOLFSD_BINDINGS=
 EnvironmentFile=-/etc/casaos/zimaos-toolfsd.env
-ExecStart=/usr/bin/zimaos-toolfsd -root ${TOOLFSD_ROOT} -socket ${TOOLFSD_SOCKET} -runtime-path ${TOOLFSD_RUNTIME_PATH} -permission-cache ${TOOLFSD_PERMISSION_CACHE} -bindings ${TOOLFSD_BINDINGS}
+ExecStart=/usr/bin/zimaos-toolfsd -container-uid ${TOOLFSD_CONTAINER_UID} -root ${TOOLFSD_ROOT} -socket ${TOOLFSD_SOCKET} -runtime-path ${TOOLFSD_RUNTIME_PATH} -permission-cache ${TOOLFSD_PERMISSION_CACHE} -bindings ${TOOLFSD_BINDINGS}
 # Keep mounts in the host mount namespace so Docker can receive them via rslave.
 PrivateMounts=no
 Restart=on-failure
