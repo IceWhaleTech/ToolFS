@@ -169,11 +169,24 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, identity 
 	if err != nil {
 		return MountInfo{}, errors.Join(err, prepared.rollback())
 	}
+	var bindDir *os.File
+	var bindMode os.FileMode
+	if s.config.MountOptions.ContainerUID != 0 {
+		bindDir, bindMode, err = prepareContainerBindSource(layout.bind)
+		if err != nil {
+			return MountInfo{}, errors.Join(err, prepared.rollback())
+		}
+		defer bindDir.Close()
+	}
 
 	handle, err := s.mount(ctx, resolver, s.provider, agentUserID, app,
 		layout.point, effective, s.config.MountOptions)
 	if err != nil {
-		return MountInfo{}, errors.Join(err, prepared.rollback())
+		var restoreErr error
+		if bindDir != nil {
+			restoreErr = bindDir.Chmod(bindMode)
+		}
+		return MountInfo{}, errors.Join(err, restoreErr, prepared.rollback())
 	}
 
 	s.mu.Lock()

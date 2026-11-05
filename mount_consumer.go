@@ -42,3 +42,32 @@ func validateContainerMountLocation(path string) error {
 		}
 	}
 }
+
+// Only this directory crosses the container bind boundary. Its host ancestors
+// remain private, while its mode must be independent of the daemon's umask.
+// Keep the descriptor open so a failed mount can restore the original inode.
+func prepareContainerBindSource(path string) (*os.File, os.FileMode, error) {
+	if err := validateContainerMountLocation(filepath.Dir(path)); err != nil {
+		return nil, 0, err
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	dir := os.NewFile(uintptr(fd), path)
+	info, err := dir.Stat()
+	if err != nil {
+		dir.Close()
+		return nil, 0, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || st.Uid != 0 || info.Mode().Perm()&0o022 != 0 {
+		dir.Close()
+		return nil, 0, fmt.Errorf("toolfs: unsafe container bind source: %s", path)
+	}
+	if err := dir.Chmod(0o755); err != nil {
+		dir.Close()
+		return nil, 0, err
+	}
+	return dir, info.Mode(), nil
+}
