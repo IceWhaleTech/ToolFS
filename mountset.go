@@ -69,10 +69,11 @@ func mountKey(agentUserID, app string) string { return agentUserID + "\x00" + ap
 
 // MountInfo describes a live mount for the control API.
 type MountInfo struct {
-	AgentUserID string `json:"agent_user_id"`
-	App         string `json:"app,omitempty"`
-	Username    string `json:"username"`
-	UserID      int    `json:"user_id"`
+	AgentUserID  string `json:"agent_user_id"`
+	App          string `json:"app,omitempty"`
+	Username     string `json:"username"`
+	UserID       int    `json:"user_id"`
+	ContainerUID uint32 `json:"container_uid,omitempty"`
 	// BindSource is the stable directory an orchestrator should bind into a
 	// container. It is the parent of MountPoint and is never unmounted.
 	BindSource string `json:"bind_source"`
@@ -88,8 +89,17 @@ func NewMountSet(config MountSetConfig, resolver IdentityResolver, provider Perm
 	if resolver == nil || provider == nil {
 		return nil, errors.New("toolfs: resolver and provider are required")
 	}
-	if err := os.MkdirAll(config.Root, 0o755); err != nil {
+	mode := os.FileMode(0o755)
+	if config.MountOptions.ContainerUID != 0 {
+		mode = 0o700
+	}
+	if err := os.MkdirAll(config.Root, mode); err != nil {
 		return nil, fmt.Errorf("toolfs: cannot create mount root: %w", err)
+	}
+	if config.MountOptions.ContainerUID != 0 {
+		if err := validatePrivateMountRoot(config.Root); err != nil {
+			return nil, err
+		}
 	}
 	return &MountSet{
 		config:   config,
@@ -159,11 +169,24 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, identity 
 	if err != nil {
 		return MountInfo{}, errors.Join(err, prepared.rollback())
 	}
+	var bindDir *os.File
+	var bindMode os.FileMode
+	if s.config.MountOptions.ContainerUID != 0 {
+		bindDir, bindMode, err = prepareContainerBindSource(layout.bind)
+		if err != nil {
+			return MountInfo{}, errors.Join(err, prepared.rollback())
+		}
+		defer bindDir.Close()
+	}
 
 	handle, err := s.mount(ctx, resolver, s.provider, agentUserID, app,
 		layout.point, effective, s.config.MountOptions)
 	if err != nil {
-		return MountInfo{}, errors.Join(err, prepared.rollback())
+		var restoreErr error
+		if bindDir != nil {
+			restoreErr = bindDir.Chmod(bindMode)
+		}
+		return MountInfo{}, errors.Join(err, restoreErr, prepared.rollback())
 	}
 
 	s.mu.Lock()
@@ -277,10 +300,11 @@ func (s *MountSet) Close() error {
 func (s *MountSet) infoFor(live *liveMount) MountInfo {
 	identity := live.handle.Identity()
 	info := MountInfo{
-		AgentUserID: live.agentUserID,
-		App:         live.app,
-		BindSource:  live.bindSource,
-		MountPoint:  live.handle.MountPoint(),
+		AgentUserID:  live.agentUserID,
+		App:          live.app,
+		BindSource:   live.bindSource,
+		MountPoint:   live.handle.MountPoint(),
+		ContainerUID: s.config.MountOptions.ContainerUID,
 	}
 	if identity != nil {
 		info.Username = identity.Username

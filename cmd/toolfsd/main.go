@@ -34,18 +34,22 @@ func main() {
 		allowDelete  = flag.Bool("allow-delete", false, "grant delete on read-write grants (withheld by default)")
 		fallbackUser = flag.String("fallback-user", "", "ZimaOS username used for unbound agent accounts (transition mode)")
 		fallbackUID  = flag.Int("fallback-uid", 0, "ZimaOS numeric uid paired with -fallback-user")
+		containerUID = flag.Uint("container-uid", 0, "Unix UID/GID of non-root container consumers (requires a private root-owned mount root)")
 		debug        = flag.Bool("debug", false, "enable FUSE protocol logging")
 	)
 	flag.Parse()
 
+	if *containerUID > 2147483647 {
+		log.Fatal("toolfsd: container-uid is outside the supported UID range")
+	}
 	if err := run(*root, *socketPath, *bindingsPath, *runtimePath, *cachePath,
-		*allowDelete, *fallbackUser, *fallbackUID, *debug); err != nil {
+		*allowDelete, *fallbackUser, *fallbackUID, uint32(*containerUID), *debug); err != nil {
 		log.Fatalf("toolfsd: %v", err)
 	}
 }
 
 func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
-	allowDelete bool, fallbackUser string, fallbackUID int, debug bool) error {
+	allowDelete bool, fallbackUser string, fallbackUID int, containerUID uint32, debug bool) error {
 
 	if !toolfs.FUSEAvailable() {
 		return fmt.Errorf("no usable FUSE implementation (Linux needs /dev/fuse)")
@@ -66,7 +70,7 @@ func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
 	mounts, err := toolfs.NewMountSet(toolfs.MountSetConfig{
 		Root:         root,
 		DefaultCaps:  toolfs.AgentCapabilities{AllowDelete: allowDelete},
-		MountOptions: toolfs.MountConfig{Debug: debug},
+		MountOptions: toolfs.MountConfig{Debug: debug, ContainerUID: containerUID},
 	}, resolver, provider)
 	if err != nil {
 		return err

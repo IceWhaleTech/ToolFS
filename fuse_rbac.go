@@ -46,10 +46,13 @@ type MountHandle interface {
 
 // MountConfig tunes a per-user mount.
 type MountConfig struct {
-	// AllowOther exposes the mount to other local users. Left false: under
-	// host-orchestrated containers the only consumer is the one container the
-	// mount is bound into, so cross-user local access is never needed.
+	// AllowOther exposes the mount to other local users. A ContainerUID mount
+	// enables this only below a private, root-owned host directory.
 	AllowOther bool
+	// ContainerUID is an optional Unix execution UID, distinct from the ZimaOS
+	// account ID. Non-root consumers need allow_other because toolfsd mounts as
+	// root. Host path protection and selective container binds remain mandatory.
+	ContainerUID uint32
 	// Debug enables go-fuse protocol logging.
 	Debug bool
 
@@ -141,10 +144,33 @@ func MountForIdentity(
 // first — stamping the agent-side session and task labels, for instance — can
 // still reach the same mount path.
 func mountView(mountPoint string, view *InstanceView, config MountConfig) (MountHandle, error) {
+	if config.ContainerUID != 0 {
+		if err := validateContainerMountLocation(mountPoint); err != nil {
+			view.closeRoots()
+			return nil, err
+		}
+	}
 	view.CacheTimeout = config.CacheTimeout
 	view.ZeroCopyRead = config.ZeroCopyRead
 	root := &instanceRoot{view: view}
 
+	opts := fuseOptionsFor(view.Identity.Username, config)
+
+	server, err := gofs.Mount(mountPoint, root, opts)
+	if err != nil {
+		view.closeRoots()
+		return nil, err
+	}
+
+	return &mountHandle{
+		mountPoint: mountPoint,
+		identity:   view.Identity,
+		server:     server,
+		view:       view,
+	}, nil
+}
+
+func fuseOptionsFor(username string, config MountConfig) *gofs.Options {
 	ttl := config.CacheTimeout
 	opts := &gofs.Options{
 		EntryTimeout:    &ttl,
@@ -161,22 +187,16 @@ func mountView(mountPoint string, view *InstanceView, config MountConfig) (Mount
 	opts.MountOptions.MaxBackground = 64
 
 	opts.MountOptions.Name = "toolfs"
-	opts.MountOptions.FsName = "toolfs-" + view.Identity.Username
-	opts.MountOptions.AllowOther = config.AllowOther
+	opts.MountOptions.FsName = "toolfs-" + username
+	opts.MountOptions.AllowOther = config.AllowOther || config.ContainerUID != 0
+	if config.ContainerUID != 0 {
+		opts.UID = config.ContainerUID
+		opts.GID = config.ContainerUID
+		opts.MountOptions.Options = []string{"default_permissions"}
+	}
 	opts.MountOptions.Debug = config.Debug
 
-	server, err := gofs.Mount(mountPoint, root, opts)
-	if err != nil {
-		view.closeRoots()
-		return nil, err
-	}
-
-	return &mountHandle{
-		mountPoint: mountPoint,
-		identity:   view.Identity,
-		server:     server,
-		view:       view,
-	}, nil
+	return opts
 }
 
 // instanceRoot is the mount root. Its children are exactly the grants.
@@ -234,7 +254,7 @@ func (r *instanceRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		built := r.view.BuiltAt
 		out.SetTimes(&built, &built, &built)
 		out.Nlink = 1
-		return r.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		return directoryInode(ctx, &r.Inode, r.view, name, child), 0
 	}
 
 	node, ok := r.view.rootChild(name)
@@ -277,17 +297,19 @@ func childInode(
 		if !view.Allows(entry, "", OpList) {
 			return nil, syscall.ENOENT
 		}
-		child := &instanceDir{view: view, entry: entry, rel: ""}
-		out.Mode = syscall.S_IFDIR | entryMode(entry)
-		if info, err := entry.root.Stat(""); err == nil {
-			stampAttrTimes(&out.Attr, info)
+		info, err := entry.root.Stat("")
+		if err != nil {
+			return nil, errnoFor(err)
 		}
-		return parent.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		child := &instanceDir{view: view, entry: entry, rel: "", backing: info}
+		out.Mode = syscall.S_IFDIR | entryMode(entry)
+		stampAttrTimes(&out.Attr, info)
+		return directoryInode(ctx, parent, view, node.name, child), 0
 	}
 	child := &synthDir{view: view, node: node}
 	out.Mode = syscall.S_IFDIR | 0o555
 	stampVirtualTimes(&out.Attr, view)
-	return parent.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	return directoryInode(ctx, parent, view, node.name, child), 0
 }
 
 // synthDir is a synthetic, traversal-only directory: one of the path components
@@ -340,9 +362,10 @@ func (d *synthDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 // instanceDir is a directory beneath one grant.
 type instanceDir struct {
 	gofs.Inode
-	view  *InstanceView
-	entry *NamespaceEntry
-	rel   string
+	view    *InstanceView
+	entry   *NamespaceEntry
+	rel     string
+	backing fs.FileInfo
 }
 
 var (
@@ -411,10 +434,10 @@ func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	out.SetAttrTimeout(0)
 
 	if info.IsDir() {
-		child := &instanceDir{view: d.view, entry: d.entry, rel: childRel}
+		child := &instanceDir{view: d.view, entry: d.entry, rel: childRel, backing: info}
 		out.Mode = syscall.S_IFDIR | entryMode(d.entry)
 		stampAttrTimes(&out.Attr, info)
-		return d.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		return directoryInode(ctx, &d.Inode, d.view, name, child), 0
 	}
 
 	child := &instanceFile{view: d.view, entry: d.entry, rel: childRel}
@@ -425,6 +448,9 @@ func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 }
 
 func (d *instanceDir) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	if !d.view.Allows(d.entry, d.rel, OpList) {
+		return syscall.ENOENT
+	}
 	out.Mode = syscall.S_IFDIR | entryMode(d.entry)
 	if info, err := d.entry.root.Stat(d.rel); err == nil {
 		stampAttrTimes(&out.Attr, info)

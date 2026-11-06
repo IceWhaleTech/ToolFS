@@ -102,6 +102,11 @@ type InstanceView struct {
 	// stored — a bound without the complexity of eviction.
 	decisionCount atomic.Int64
 
+	// inodeMu serializes publication of live directory children. Entry TTLs
+	// remain zero; a revalidated directory keeps its inode while its backing
+	// identity and grant entry are unchanged, so LOOKUP cannot detach cwd.
+	inodeMu sync.Mutex
+
 	// mu guards the projection — root, grants, Access and Generation — so it can
 	// be rebuilt in place when the authority's grants change (reproject) while
 	// FUSE reads walk it concurrently. Decisions self-invalidate on generation,

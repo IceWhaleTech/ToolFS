@@ -628,7 +628,7 @@ func MountForIdentity(
 ) (MountHandle, error)
 ```
 
-`Options` 只接受性能类安全白名单；cache TTL、direct IO 等安全相关选项由挂载实现统一生成，调用方传入冲突配置时直接报错。宿主编排形态下不启用 `AllowOther`（§6.3）。
+`Options` 只接受性能类安全白名单；cache TTL、direct IO 等安全相关选项由挂载实现统一生成，调用方传入冲突配置时直接报错。非 root 容器的 `AllowOther` 条件见 §6.3。
 
 不能继续丢弃 `*fuse.Server`：`MountHandle` 持有 server、当前 `InstanceView`、inode 索引和取消函数，用于主动撤权、cache invalidation、卸载和健康检查。**其生命周期由 `toolfsd` 管理，与 `agentd` 管理的实例容器一一对应**（§14.2.4）。
 
@@ -645,11 +645,11 @@ func MountForIdentity(
 
 宿主上的挂载点归属：
 
-- 每个用户的挂载点由 `toolfsd` 以 root 创建，模式 `0700`，**仅 bind 给该用户的实例容器**；
+- 每个用户的挂载点由 `toolfsd` 以 root 创建，位于 root 私有的 `0700` 挂载根之下，仅 bind 给该用户的实例容器；
 - 其他实例容器的挂载视图中**根本不存在**该路径，无从访问；
 - 真实数据与 `.toolfs-state/` 保护区**不 bind 进任何容器**（§14.4）。
 
-因此 FUSE 挂载**不需要 `AllowOther`**：唯一的消费者是被 bind 进去的那一个容器，其内部进程通过 bind 访问，不涉及跨用户的本机调用。
+2026-11-06 修订：容器内的非 root 进程即使通过 bind 访问，仍受 FUSE 挂载者身份检查。非零 `ContainerUID` 配置因此启用 `AllowOther` 和 `default_permissions`，并检查宿主私有目录。零值配置继续保留 root-only 行为。执行 UID、目录身份和验收条件见[非 root 容器消费 ToolFS](non-root-container-consumers.md)。
 
 > **此前设计的 caller UID 校验（`fuse.FromContext` + `ExpectedUID`）在本形态下不再必要。** 它是为「同一宿主上多个本地用户共用挂载」的场景设计的；改为每实例独立容器后，边界前移到了容器与 bind 层面。
 >

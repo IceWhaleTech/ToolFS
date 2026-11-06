@@ -104,11 +104,15 @@ func (d *instanceDir) Mkdir(ctx context.Context, name string, mode uint32, out *
 	}
 	d.entry.protection.journal(d.view, ProtectedChange{Op: MutationCreate, Path: childRel})
 
-	child := &instanceDir{view: d.view, entry: d.entry, rel: childRel}
+	info, err := d.entry.root.Stat(childRel)
+	if err != nil {
+		return nil, errnoFor(err)
+	}
+	child := &instanceDir{view: d.view, entry: d.entry, rel: childRel, backing: info}
 	out.SetEntryTimeout(0)
 	out.SetAttrTimeout(0)
 	out.Mode = syscall.S_IFDIR | entryMode(d.entry)
-	return d.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	return directoryInode(ctx, &d.Inode, d.view, name, child), 0
 }
 
 // Unlink moves a file into the grant's trash.
