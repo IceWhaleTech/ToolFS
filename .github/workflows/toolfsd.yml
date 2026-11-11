@@ -71,7 +71,7 @@ jobs:
           import json
           import sys
 
-          required = {"TestMount_EachUserSeesOnlyOwnDirectories", "TestControl_MountAndUnmountLifecycle", "TestMountStorageRootTracksTopologyWithoutDetachingCWD"}
+          required = {"TestMount_EachUserSeesOnlyOwnDirectories", "TestControl_MountAndUnmountLifecycle", "TestMountStorageRootTracksTopologyWithoutDetachingCWD", "TestMountAgentAuthorizationLifecycle"}
           with open(sys.argv[1]) as results:
               passed = {event.get("Test") for line in results if (event := json.loads(line)).get("Action") == "pass"}
           missing = required - passed

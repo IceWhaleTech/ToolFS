@@ -32,8 +32,8 @@ var ErrNoGrants = errors.New("toolfs: no active grants for user")
 // PermissionProvider supplies per-user authorization snapshots.
 type PermissionProvider interface {
 	// GrantsFor returns a snapshot for the resolved identity, possibly served
-	// from cache. When app is non-empty and the (user, app) agent is scoped,
-	// the snapshot is the agent subject's, already capped by the owner user.
+	// from cache. When app is non-empty the snapshot is always the agent
+	// subject's, already capped by its owner; an ungranted agent sees no data.
 	GrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error)
 	// FreshGrantsFor is GrantsFor with the strongest freshness the provider
 	// can offer. Destructive operations use this so an irreversible action is
@@ -54,10 +54,6 @@ type PermissionProvider interface {
 type AuthorityPermissionProvider struct {
 	entries EntriesReader
 	client  *permission.Client
-
-	scopeMu         sync.Mutex
-	scopes          map[string]struct{}
-	scopeGeneration int64
 
 	mu sync.Mutex
 	// served maps subject → identity for every snapshot handed out, so a
@@ -157,41 +153,22 @@ const homeEntryName = "Home"
 
 // GrantsFor projects the authority's snapshot for one identity.
 //
-// When app is non-empty, an explicitly declared agent always uses its own
-// snapshot, even if it holds no effective read. Only a genuinely undeclared
-// legacy app keeps the user view. Declaration and snapshot errors fail closed;
-// withdrawing access must never promote the identity used by the decider.
+// An app always uses its agent subject, including before its first grant and
+// after every declaration is removed. Ownership caps permissions; it does not
+// confer the user's view. An empty app is the trusted direct-user mode.
 func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error) {
 	if identity == nil {
 		return nil, ErrNoIdentity
 	}
-	userSubject := permission.NamespaceUser + ":" + itoa(identity.UserID)
-	subject := userSubject
+	subject := permission.NamespaceUser + ":" + itoa(identity.UserID)
+	if app != "" {
+		subject = permission.NamespaceAgent + ":" + itoa(identity.UserID) + ":" + app
+	}
 
 	snapshot, err := p.client.Snapshot(ctx, subject)
 	if err != nil {
 		// Fail closed. A provider error must never be read as "no restrictions".
 		return nil, err
-	}
-
-	userFallback := false
-	var scopeGeneration int64
-	if app != "" {
-		agentSubject := permission.NamespaceAgent + ":" + itoa(identity.UserID) + ":" + app
-		declared, generation, err := p.agentDeclared(ctx, agentSubject)
-		if err != nil {
-			return nil, err
-		}
-		agentSnap, err := p.client.Snapshot(ctx, agentSubject)
-		if err != nil {
-			return nil, err
-		}
-		if declared {
-			subject = agentSubject
-			snapshot = agentSnap
-		} else {
-			userFallback, scopeGeneration = true, generation
-		}
 	}
 
 	if p.entries == nil {
@@ -238,7 +215,6 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 		pathAliases: append([]permission.PathAlias(nil), snapshot.PathAliases...),
 		authority: &authorityDecider{
 			client: p.client, subject: subject,
-			userFallback: userFallback, scopeGeneration: scopeGeneration,
 		},
 	}, nil
 }
@@ -259,11 +235,6 @@ func (p *AuthorityPermissionProvider) Invalidate(string) {}
 type authorityDecider struct {
 	client  *permission.Client
 	subject string
-	// A legacy user view is valid only for the declaration generation that
-	// proved it unscoped. Re-warming the user must not revive it after an
-	// agent ownership change while re-projection is still pending.
-	userFallback    bool
-	scopeGeneration int64
 }
 
 // generation exposes the client's live generation for decision-memo keying.
@@ -286,9 +257,6 @@ func (d *authorityDecider) generation() int64 {
 // refusal. Fail closed: the alternative reads a cache miss as "no
 // restrictions".
 func (d *authorityDecider) allowedOps(hostPath string, caps AgentCapabilities) AccessOp {
-	if d.userFallback && d.client.Generation() != d.scopeGeneration {
-		return 0
-	}
 	read, known := d.client.Cached(d.subject, permission.NamespacePath, hostPath, permission.RelRead)
 	if !known || !read {
 		return 0

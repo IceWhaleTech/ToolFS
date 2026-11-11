@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,74 +20,101 @@ type agentScopeEvent struct {
 }
 
 type agentScopeAuthority struct {
-	mu            sync.Mutex
-	generation    int64
-	root          string
-	owner         bool
-	pathDeclared  bool
-	pathRelation  string
-	tuplesDrift   bool
-	read          bool
-	complete      bool
-	tuplesError   bool
-	tupleRequests int
-	events        chan agentScopeEvent
+	mu             sync.Mutex
+	generation     int64
+	root           string
+	owner          bool
+	grants         map[string][]string
+	denied         map[string][]string
+	ownerGrants    map[string][]string
+	snapshotStatus int
+	entriesStatus  int
+	entriesSubject string
+	entriesDrift   bool
+	requests       []string
+	events         chan agentScopeEvent
+}
+
+func (a *agentScopeAuthority) snapshot(subject string) *permission.Snapshot {
+	ns, id, _ := strings.Cut(subject, ":")
+	result := &permission.Snapshot{Subject: permission.Subject{Namespace: ns, ID: id}, Generation: a.generation}
+	if a.root != "/media/Docs" {
+		result.PathAliases = []permission.PathAlias{{Canonical: "/media/Docs", Alias: a.root}}
+	}
+	path := permission.NamespaceSnapshot{}
+	owner := &permission.Snapshot{Namespaces: map[string]permission.NamespaceSnapshot{"path": {}}}
+	for object, relations := range a.ownerGrants {
+		entry := owner.Namespaces["path"]
+		entry.Allow = append(entry.Allow, permission.Grant{Object: object, Relations: relations})
+		owner.Namespaces["path"] = entry
+	}
+	if subject == "user:7" {
+		path = owner.Namespaces["path"]
+	} else if subject == "agent:7:photos" && a.owner {
+		for object, relations := range a.grants {
+			var effective []string
+			for _, relation := range relations {
+				if owner.Allows("path", object, relation) {
+					effective = append(effective, relation)
+				}
+			}
+			if len(effective) != 0 {
+				path.Allow = append(path.Allow, permission.Grant{Object: object, Relations: effective})
+			}
+		}
+		for object, relations := range a.denied {
+			path.Deny = append(path.Deny, permission.Grant{Object: object, Relations: relations})
+		}
+	}
+	result.Namespaces = map[string]permission.NamespaceSnapshot{"path": path}
+	return result
 }
 
 func newAgentScopeProvider(t *testing.T) (*AuthorityPermissionProvider, *agentScopeAuthority) {
 	t.Helper()
-	a := &agentScopeAuthority{generation: 1, root: "/media/Docs", owner: true, pathDeclared: true, pathRelation: "read", read: true, complete: true, events: make(chan agentScopeEvent, 8)}
+	a := &agentScopeAuthority{
+		generation: 1, root: "/media/Docs", grants: map[string][]string{}, denied: map[string][]string{},
+		ownerGrants: map[string][]string{"/media/Docs": {"read", "write", "delete"}},
+		events:      make(chan agentScopeEvent, 16),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v2/permissions/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		subject := r.URL.Query().Get("subject")
-		ns, id := "user", "7"
-		roots := []permission.Grant{{Object: a.root, Relations: []string{"read", "write"}}}
-		if subject != "user:7" {
-			ns, id = "agent", "7:photos"
-			roots = nil
-			if subject == "agent:7:photos" && a.owner && a.read {
-				roots = []permission.Grant{{Object: a.root + "/allowed", Relations: []string{"read"}}}
-			}
+		a.requests = append(a.requests, "snapshot:"+subject)
+		if a.snapshotStatus != 0 && subject != "user:7" {
+			http.Error(w, "unavailable", a.snapshotStatus)
+			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": permission.Snapshot{Subject: permission.Subject{Namespace: ns, ID: id}, Generation: a.generation, Namespaces: map[string]permission.NamespaceSnapshot{"path": {Allow: roots}}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": a.snapshot(subject)})
 	})
 	mux.HandleFunc("/v2/permissions/entries", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		subject := r.URL.Query().Get("subject")
-		ns, id := "user", "7"
-		if subject != "user:7" {
-			ns, id = "agent", "7:photos"
-		}
-		entries := fixturePermissionEntries(map[string][]string{a.root: {"read"}}, nil)
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": PermissionEntries{Subject: permission.Subject{Namespace: ns, ID: id}, Generation: a.generation, Entries: entries}})
-	})
-	mux.HandleFunc("/v2/permissions/tuples", func(w http.ResponseWriter, r *http.Request) {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		a.tupleRequests++
-		if a.tuplesError {
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		a.requests = append(a.requests, "entries:"+subject)
+		if a.entriesStatus != 0 {
+			http.Error(w, "unavailable", a.entriesStatus)
 			return
 		}
-		list := permission.TupleList{Generation: a.generation, Complete: a.complete}
-		namespace, relation := r.URL.Query().Get("namespace"), r.URL.Query().Get("relation")
-		if namespace == "agent" && relation == "owner" && a.owner {
-			list.Tuples = append(list.Tuples, permission.Tuple{Namespace: "agent", Object: "7:photos", Relation: "owner", Subject: "user:7", Effect: "allow"})
-		}
-		if namespace == "path" && relation == a.pathRelation && a.pathDeclared {
-			effect := "deny"
-			if a.read {
-				effect = "allow"
+		snapshot := a.snapshot(subject)
+		allow := map[string][]string{}
+		for _, grant := range snapshot.Namespaces["path"].Allow {
+			if snapshot.Allows("path", grant.Object, "read") {
+				allow[grant.Object] = grant.Relations
 			}
-			list.Tuples = append(list.Tuples, permission.Tuple{Namespace: "path", Object: a.root + "/allowed", Relation: a.pathRelation, Subject: "agent:7:photos", Effect: effect})
 		}
-		if a.tuplesDrift && namespace == "path" && relation == "write" {
-			list.Generation++
+		if a.entriesSubject != "" {
+			snapshot = a.snapshot(a.entriesSubject)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": list})
+		generation := a.generation
+		if a.entriesDrift {
+			generation++
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": PermissionEntries{
+			Subject: snapshot.Subject, Generation: generation, Entries: fixturePermissionEntries(allow, nil),
+		}})
 	})
 	mux.HandleFunc("/v2/permissions/events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -125,7 +153,7 @@ func newAgentScopeProvider(t *testing.T) (*AuthorityPermissionProvider, *agentSc
 
 func scopeAccess(t *testing.T, p *AuthorityPermissionProvider, app string) *AccessSnapshot {
 	t.Helper()
-	access, err := p.GrantsFor(context.Background(), &ZimaIdentity{Username: "alice", UserID: 7}, app)
+	access, err := p.GrantsFor(t.Context(), &ZimaIdentity{Username: "alice", UserID: 7}, app)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,162 +177,171 @@ func (a *agentScopeAuthority) change(t *testing.T, p *AuthorityPermissionProvide
 	}
 }
 
-func TestAgentScopeLastReadRevocationNeverFallsBackToUser(t *testing.T) {
+func TestAgentDefaultsToNoDirectoryAccess(t *testing.T) {
 	p, a := newAgentScopeProvider(t)
-	initial := scopeAccess(t, p, "photos")
-	if !initial.Allows("/media/Docs/allowed/file", OpRead, AgentCapabilities{}) || initial.Allows("/media/Docs/blocked/file", OpRead, AgentCapabilities{}) {
-		t.Fatal("initial agent view does not match the declared scope")
-	}
-	a.change(t, p, "path", func() { a.read = false })
-	access := scopeAccess(t, p, "photos")
-	for _, path := range []string{"/media/Docs/allowed/file", "/media/Docs/blocked/file"} {
-		if access.Allows(path, OpRead, AgentCapabilities{}) {
-			t.Errorf("revoking last read promoted agent access to %s", path)
+	for _, app := range []string{"photos", "blue", "other"} {
+		access := scopeAccess(t, p, app)
+		if len(access.Grants) != 0 || len(access.entries) != 0 || access.Allows("/media/Docs/file", OpRead, AgentCapabilities{}) {
+			t.Fatalf("undeclared app %s acquired user access", app)
 		}
 	}
-	if len(access.Grants) != 0 {
-		t.Errorf("zero-read scoped agent projected user roots: %+v", access.Grants)
+	a.mu.Lock()
+	for _, request := range a.requests {
+		if request == "snapshot:user:7" || request == "entries:user:7" {
+			t.Errorf("app authorization fetched the user view: %s", request)
+		}
+	}
+	a.mu.Unlock()
+	if !scopeAccess(t, p, "").Allows("/media/Docs/file", OpRead, AgentCapabilities{}) {
+		t.Fatal("direct user view lost its own permission")
 	}
 }
 
-func TestAgentScopeIsDurableWithoutAnyEffectiveRead(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		owner        bool
-		pathDeclared bool
-	}{
-		{"owner-only", true, false},
-		{"explicit-read-deny", true, true},
-		{"owner-lost-path-statement-remains", false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p, a := newAgentScopeProvider(t)
-			a.change(t, p, "agent", func() { a.owner, a.pathDeclared, a.read = tc.owner, tc.pathDeclared, false })
-			access := scopeAccess(t, p, "photos")
-			if len(access.Grants) != 0 || access.Allows("/media/Docs/blocked/file", OpRead, AgentCapabilities{}) {
-				t.Fatal("empty scoped agent acquired the user view on its first projection")
+func TestAgentAuthorizationLifecycle(t *testing.T) {
+	p, a := newAgentScopeProvider(t)
+	assertPaths := func(wantA, wantB bool) *AccessSnapshot {
+		t.Helper()
+		access := scopeAccess(t, p, "photos")
+		for path, want := range map[string]bool{"/media/Docs/A/file": wantA, "/media/Docs/B/file": wantB, "/media/Docs/other/file": false} {
+			if got := access.Allows(path, OpRead, AgentCapabilities{}); got != want {
+				t.Errorf("%s read = %v, want %v", path, got, want)
 			}
-		})
+		}
+		if !wantA && !wantB && (len(access.Grants) != 0 || len(access.entries) != 0) {
+			t.Fatal("empty agent projected data entries")
+		}
+		return access
+	}
+	assertPaths(false, false)
+	a.change(t, p, "agent", func() { a.owner = true })
+	assertPaths(false, false)
+	a.change(t, p, "path", func() { a.grants["/media/Docs/A"] = []string{"read"} })
+	old := assertPaths(true, false)
+	a.change(t, p, "path", func() { a.grants["/media/Docs/B"] = []string{"read"} })
+	assertPaths(true, true)
+	a.change(t, p, "path", func() { delete(a.grants, "/media/Docs/A") })
+	assertPaths(false, true)
+	if old.Allows("/media/Docs/A/file", OpRead, AgentCapabilities{}) {
+		t.Fatal("old access snapshot retained revoked authorization")
+	}
+	a.change(t, p, "path", func() { delete(a.grants, "/media/Docs/B") })
+	assertPaths(false, false)
+	a.change(t, p, "agent", func() { a.owner = false })
+	assertPaths(false, false)
+	// Fresh provider and first projection must not promote a fully erased agent.
+	restarted := NewAuthorityPermissionProvider(p.client, p.entries)
+	if access := scopeAccess(t, restarted, "photos"); len(access.Grants) != 0 {
+		t.Fatal("provider restart restored the user view")
 	}
 }
 
-func TestAgentScopeClearLastPathGrantKeepsOwnerScope(t *testing.T) {
+func TestAgentOwnerIsOnlyACeiling(t *testing.T) {
 	p, a := newAgentScopeProvider(t)
-	_ = scopeAccess(t, p, "photos")
-	a.change(t, p, "path", func() { a.pathDeclared, a.read = false, false })
-	if access := scopeAccess(t, p, "photos"); len(access.Grants) != 0 || access.Allows("/media/Docs/blocked/file", OpRead, AgentCapabilities{}) {
-		t.Fatal("clearing the last path grant removed the agent's scope")
-	}
-}
-
-func TestUnscopedAppKeepsUserViewButCannotOutliveScopeChange(t *testing.T) {
-	p, a := newAgentScopeProvider(t)
-	a.change(t, p, "agent", func() { a.owner, a.pathDeclared, a.read = false, false, false })
-	legacy := scopeAccess(t, p, "photos")
-	if !legacy.Allows("/media/Docs/blocked/file", OpRead, AgentCapabilities{}) {
-		t.Fatal("a genuinely unscoped app lost its compatible user view")
+	a.change(t, p, "path", func() { a.grants["/media/Docs/A"] = []string{"read", "write"} })
+	if access := scopeAccess(t, p, "photos"); len(access.Grants) != 0 {
+		t.Fatal("unowned agent received path permissions")
 	}
 	a.change(t, p, "agent", func() { a.owner = true })
-	_ = scopeAccess(t, p, "") // Even a re-warmed user snapshot must not revive the old fallback.
-	if legacy.Allows("/media/Docs/blocked/file", OpRead, AgentCapabilities{}) {
-		t.Fatal("old user fallback still permits reads after declaring an empty agent scope")
-	}
-	if access := scopeAccess(t, p, "photos"); len(access.Grants) != 0 {
-		t.Fatal("agent ownership change did not narrow its namespace")
-	}
-}
-
-func TestAgentScopeDeclarationReadFailsClosed(t *testing.T) {
-	for _, incomplete := range []bool{false, true} {
-		p, a := newAgentScopeProvider(t)
-		a.change(t, p, "agent", func() {
-			a.owner, a.pathDeclared, a.read = false, false, false
-			a.complete = !incomplete
-			a.tuplesError = !incomplete
-		})
-		if _, err := p.GrantsFor(context.Background(), &ZimaIdentity{Username: "alice", UserID: 7}, "photos"); err == nil {
-			t.Fatal("unknown declaration state was treated as an unscoped user fallback")
-		}
-	}
-}
-
-func TestAgentScopeDeclarationCacheIsSharedAcrossApps(t *testing.T) {
-	p, a := newAgentScopeProvider(t)
-	_ = scopeAccess(t, p, "photos")
-	a.mu.Lock()
-	first := a.tupleRequests
-	a.mu.Unlock()
-	if first == 0 {
-		t.Fatal("scope was inferred from effective read rather than authoritative declarations")
-	}
-	for _, app := range []string{"photos", "blue", "other"} {
-		_ = scopeAccess(t, p, app)
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.tupleRequests != first {
-		t.Errorf("scope declarations refetched without a generation change: %d -> %d", first, a.tupleRequests)
-	}
-}
-
-func TestUnscopedAppReprojectionRefreshesUnchangedRoots(t *testing.T) {
-	p, a := newAgentScopeProvider(t)
-	a.change(t, p, "agent", func() { a.owner, a.pathDeclared, a.read = false, false, false })
-	base := t.TempDir()
-	a.change(t, p, "path", func() { a.root = base })
-	identity := &ZimaIdentity{Username: "alice", UserID: 7}
 	access := scopeAccess(t, p, "photos")
-	access.entries = nil
-	view, err := BuildInstanceView(identity, access, AgentCapabilities{ViewAliases: []PathAlias{{Host: base, View: "/Docs"}}})
-	if err != nil {
-		t.Fatal(err)
+	if !access.Allows("/media/Docs/A/file", OpModify, AgentCapabilities{}) {
+		t.Fatal("explicit grant within owner ceiling was lost")
 	}
-	if err := view.openRoots(); err != nil {
-		t.Fatal(err)
+	a.change(t, p, "path", func() { a.ownerGrants = map[string][]string{} })
+	if scopeAccess(t, p, "photos").Allows("/media/Docs/A/file", OpRead, AgentCapabilities{}) {
+		t.Fatal("agent exceeded its owner's current permissions")
 	}
-	defer view.closeRoots()
-	entry, _, err := view.Resolve("Docs")
-	if err != nil || entry == nil || !view.Allows(entry, "marker", OpRead) {
-		t.Fatal("legacy view did not initially allow the user grant")
+	a.change(t, p, "path", func() { a.ownerGrants["/media/Docs"] = []string{"read"} })
+	if !scopeAccess(t, p, "photos").Allows("/media/Docs/A/file", OpRead, AgentCapabilities{}) {
+		t.Fatal("still-explicit read was not restored with its owner ceiling")
 	}
-	// An unrelated change invalidates the old fallback, but the authority still
-	// proves this app unscoped. Identical roots must refresh its decider too.
-	a.change(t, p, "path", func() {})
-	if view.Allows(entry, "marker", OpRead) {
-		t.Fatal("old fallback did not fail closed before reprojection")
+	if scopeAccess(t, p, "photos").Allows("/media/Docs/A/file", OpModify, AgentCapabilities{}) {
+		t.Fatal("read-only owner conferred agent write access")
 	}
-	freshAccess := scopeAccess(t, p, "photos")
-	freshAccess.entries = nil
-	fresh, err := BuildInstanceView(identity, freshAccess, AgentCapabilities{ViewAliases: []PathAlias{{Host: base, View: "/Docs"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	changed, err := view.reproject(fresh)
-	if err != nil || changed {
-		t.Fatalf("unchanged roots were rebuilt: %v, %v", changed, err)
-	}
-	if !view.Allows(entry, "marker", OpRead) {
-		t.Fatal("unchanged roots retained a stale fallback decider after reprojection")
+	a.change(t, p, "agent", func() { a.owner = false })
+	if scopeAccess(t, p, "photos").Allows("/media/Docs/A/file", OpRead, AgentCapabilities{}) {
+		t.Fatal("owner removal revived user permissions")
 	}
 }
 
-func TestAgentScopeNonReadStatementsStillDeclareScope(t *testing.T) {
-	for _, relation := range []string{"write", "delete", "smb", "owner"} {
-		t.Run(relation, func(t *testing.T) {
+func TestAgentAuthorityFailuresNeverSelectUser(t *testing.T) {
+	for _, failure := range []string{"snapshot", "entries", "subject", "generation"} {
+		t.Run(failure, func(t *testing.T) {
 			p, a := newAgentScopeProvider(t)
-			a.change(t, p, "path", func() { a.owner, a.read, a.pathRelation = false, false, relation })
-			access := scopeAccess(t, p, "photos")
-			if len(access.Grants) != 0 || access.Allows("/media/Docs/blocked/file", OpRead, AgentCapabilities{}) {
-				t.Fatal("non-read declaration was treated as an unscoped user")
+			a.change(t, p, "agent", func() {
+				switch failure {
+				case "snapshot":
+					a.snapshotStatus = http.StatusServiceUnavailable
+				case "entries":
+					a.entriesStatus = http.StatusServiceUnavailable
+				case "subject":
+					a.entriesSubject = "user:7"
+				case "generation":
+					a.entriesDrift = true
+				}
+			})
+			if _, err := p.GrantsFor(t.Context(), &ZimaIdentity{Username: "alice", UserID: 7}, "photos"); err == nil {
+				t.Fatal("invalid agent authority response produced an access snapshot")
 			}
 		})
 	}
 }
 
-func TestAgentScopeMixedDeclarationGenerationsFailClosed(t *testing.T) {
+func TestAgentRevocationFailsClosedWhenRewarmingFails(t *testing.T) {
 	p, a := newAgentScopeProvider(t)
-	a.change(t, p, "path", func() { a.owner, a.pathDeclared, a.tuplesDrift = false, false, true })
-	if _, err := p.GrantsFor(t.Context(), &ZimaIdentity{Username: "alice", UserID: 7}, "photos"); err == nil {
-		t.Fatal("mixed declaration generations allowed a user fallback")
+	a.change(t, p, "agent", func() {
+		a.owner = true
+		a.grants["/media/Docs/A"] = []string{"read"}
+	})
+	access := scopeAccess(t, p, "photos")
+	a.change(t, p, "path", func() {
+		delete(a.grants, "/media/Docs/A")
+		a.snapshotStatus = http.StatusServiceUnavailable
+	})
+	if access.Allows("/media/Docs/A/file", OpRead, AgentCapabilities{}) {
+		t.Fatal("failed re-warm retained a revoked grant")
+	}
+}
+
+func TestAgentSubjectsDoNotShareUserOrOtherAppPermissions(t *testing.T) {
+	p, a := newAgentScopeProvider(t)
+	a.change(t, p, "agent", func() {
+		a.owner = true
+		a.grants["/media/Docs/A"] = []string{"read"}
+	})
+	photos := scopeAccess(t, p, "photos")
+	if !photos.Allows("/media/Docs/A/file", OpRead, AgentCapabilities{}) {
+		t.Fatal("explicitly authorized agent lost its read grant")
+	}
+	for _, tc := range []struct {
+		userID int
+		app    string
+	}{{7, "blue"}, {8, "photos"}} {
+		access, err := p.GrantsFor(t.Context(), &ZimaIdentity{UserID: tc.userID, Username: "other"}, tc.app)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(access.Grants) != 0 || len(access.entries) != 0 || access.Allows("/media/Docs/A/file", OpRead, AgentCapabilities{}) {
+			t.Fatalf("user %d app %s acquired another agent's permissions", tc.userID, tc.app)
+		}
+	}
+}
+
+func TestAgentWithoutEffectiveReadHasNoDirectoryEntries(t *testing.T) {
+	for _, relation := range []string{"read-deny", "write", "delete", "smb", "owner"} {
+		t.Run(relation, func(t *testing.T) {
+			p, a := newAgentScopeProvider(t)
+			a.change(t, p, "agent", func() {
+				a.owner = true
+				if relation == "read-deny" {
+					a.denied["/media/Docs/A"] = []string{"read", "write", "delete"}
+				} else {
+					a.grants["/media/Docs/A"] = []string{relation}
+				}
+			})
+			access := scopeAccess(t, p, "photos")
+			if len(access.Grants) != 0 || len(access.entries) != 0 || access.Allows("/media/Docs/private/file", OpRead, AgentCapabilities{}) {
+				t.Fatal("non-readable agent acquired user directory entries")
+			}
+		})
 	}
 }

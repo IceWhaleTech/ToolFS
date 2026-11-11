@@ -2355,11 +2355,14 @@ Linux 真机全量 PASS。
 
 **Agent 主体选择与刷新**（见 UserService `docs/rbac-design.md` §7.3）：
 
-- 显式声明 owner 的 Agent 始终用 Agent 有效快照，即使 read 为空也不回退用户；
-  只有真正未声明的 legacy app 才回退。声明查询失败时拒绝，不把失败当未声明。
-- 权限事件重热当前主体，并触发串行重选主体、原地重投影。因此首次收窄运行中
-  实例、授权增删与撤销分享无需重挂。旧 legacy 决策绑定声明 generation，不能在
-  事件后、重投影完成前恢复宽权限。无变化的 backing/inode 继续复用。
+- 非空 app 始终使用 `agent:<uid>:<app>` 的 snapshot 与 entries。默认没有任何目录权限，
+  owner 只是权限上限；未声明、owner-only、全部授权撤销、全部声明清除都不会回退用户视图。
+- 用户发送目录路径不是授权。业务侧必须在用户确认后调用 UserService path grant API；
+  按目录撤回使用 `PUT /v2/permissions/grants` 的 `relations: []`，保留必要的 deny。
+  `DELETE` 清声明可能恢复父路径继承，不等价于撤权；独立后代授权须逐一撤回。
+- 权限事件重热同一主体并串行原地重投影；旧节点/句柄逐操作校验，缓存未知时拒绝。
+  无变化的 backing/inode 继续复用，不要求重挂。空 app 仅保留受信直接用户模式；
+  Agent Management 的默认 app 为非空 `blue`，不能用空 Agent 权限触发 user 模式。
 
 ### 15.9 公共入口与逐层导航（2026-11-11，本地实现完成，待真实挂载验收）
 

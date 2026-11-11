@@ -80,8 +80,8 @@ func TestMountStorageRootTracksTopologyWithoutDetachingCWD(t *testing.T) {
 			t.Errorf("unmount storage fixture: %v", err)
 		}
 	})
-	projected := make(chan struct{}, 8)
-	p.OnChange(func(int64) { mounts.Reproject(t.Context()); projected <- struct{}{} })
+	projected := make(chan int64, 8)
+	p.OnChange(func(generation int64) { mounts.Reproject(t.Context()); projected <- generation })
 	mount, err := mounts.Mount(t.Context(), "7", "", &identity, nil)
 	if err != nil {
 		t.Fatalf("mount storage authority fixture: %v", err)
@@ -220,10 +220,19 @@ func TestMountStorageRootTracksTopologyWithoutDetachingCWD(t *testing.T) {
 	a.change(func(allow, deny map[string][]string) {
 		deny["/media/Disk"] = []string{"read"}
 	})
-	select {
-	case <-projected:
-	case <-time.After(5 * time.Second):
-		t.Fatal("authority change did not reach view")
+	// The initial SSE frame also invokes OnChange. Wait for the revocation's
+	// generation, not a queued notification for the initial snapshot.
+	revoked := time.After(5 * time.Second)
+waitForRevocation:
+	for {
+		select {
+		case generation := <-projected:
+			if generation == 2 {
+				break waitForRevocation
+			}
+		case <-revoked:
+			t.Fatal("authority change did not reach view")
+		}
 	}
 	if data, err := os.ReadFile(filepath.Join(diskPath, "marker")); err == nil {
 		t.Fatalf("revoked storage remains readable: %q", data)

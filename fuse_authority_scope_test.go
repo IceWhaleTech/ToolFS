@@ -3,18 +3,16 @@
 package toolfs
 
 import (
-	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-func TestMountAgentLastReadRevocationDeniesFileContents(t *testing.T) {
+func TestMountAgentAuthorizationLifecycle(t *testing.T) {
 	requireFUSE(t)
 	root := t.TempDir()
-	for _, name := range []string{"allowed", "blocked"} {
+	for _, name := range []string{"A", "B", "private"} {
 		if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -27,10 +25,7 @@ func TestMountAgentLastReadRevocationDeniesFileContents(t *testing.T) {
 	a.root = root
 	a.mu.Unlock()
 	identity := ZimaIdentity{Username: "alice", UserID: 7}
-	mounts, err := NewMountSet(MountSetConfig{
-		Root:        t.TempDir(),
-		DefaultCaps: AgentCapabilities{ViewAliases: []PathAlias{{Host: root, View: "/Docs"}}},
-	}, NewStaticIdentityResolver(map[string]ZimaIdentity{"7": identity}), p)
+	mounts, err := NewMountSet(MountSetConfig{Root: t.TempDir()}, NewStaticIdentityResolver(nil), p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,44 +34,85 @@ func TestMountAgentLastReadRevocationDeniesFileContents(t *testing.T) {
 			t.Errorf("unmount fixture: %v", err)
 		}
 	})
-	projected := make(chan struct{}, 8)
-	p.OnChange(func(int64) {
-		mounts.Reproject(context.Background())
-		projected <- struct{}{}
+	projected := make(chan int64, 16)
+	p.OnChange(func(generation int64) {
+		mounts.Reproject(t.Context())
+		projected <- generation
 	})
 	mount, err := mounts.Mount(t.Context(), "7", "photos", &identity, nil)
 	if err != nil {
 		t.Fatalf("mount authority fixture: %v", err)
 	}
-	allowed := filepath.Join(mount.MountPoint, "Docs", "allowed", "marker")
-	blocked := filepath.Join(mount.MountPoint, "Docs", "blocked", "marker")
-	data, err := os.ReadFile(allowed)
-	if err != nil || string(data) != "allowed" {
-		t.Fatalf("positive content control: %q, %v", data, err)
+	change := func(namespace string, mutate func()) {
+		t.Helper()
+		a.change(t, p, namespace, mutate)
+		a.mu.Lock()
+		generation := a.generation
+		a.mu.Unlock()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case got := <-projected:
+				if got == generation {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("generation %d did not reproject the mounted view", generation)
+			}
+		}
 	}
-	if _, err := os.ReadFile(blocked); err == nil {
-		t.Fatal("ungranted file contents readable before revocation")
+	assertPaths := func(wantA, wantB bool) {
+		t.Helper()
+		for name, want := range map[string]bool{"A": wantA, "B": wantB, "private": false} {
+			data, err := os.ReadFile(filepath.Join(mount.MountPoint, "Docs", name, "marker"))
+			if want && (err != nil || string(data) != name) {
+				t.Errorf("granted %s: %q, %v", name, data, err)
+			} else if !want && err == nil {
+				t.Errorf("ungranted %s remains readable: %q", name, data)
+			}
+		}
+		if !wantA && !wantB {
+			assertDirNames(t, "empty agent", mount.MountPoint, nil)
+		}
 	}
-	open, err := os.Open(allowed)
+	assertPaths(false, false)
+	change("agent", func() { a.owner = true })
+	assertPaths(false, false)
+	change("path", func() { a.grants["/media/Docs/A"] = []string{"read"} })
+	assertPaths(true, false)
+	file, err := os.Open(filepath.Join(mount.MountPoint, "Docs/A/marker"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer open.Close()
-	a.change(t, p, "path", func() { a.read = false })
-	select {
-	case <-projected:
-	case <-time.After(5 * time.Second):
-		t.Fatal("authority event did not reproject the mounted view")
+	defer file.Close()
+	dir, err := os.Open(filepath.Join(mount.MountPoint, "Docs/A"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, path := range []string{allowed, blocked} {
-		if data, err := os.ReadFile(path); err == nil {
-			t.Errorf("revocation exposed file contents at %s: %q", path, data)
-		}
+	defer dir.Close()
+	change("path", func() { a.grants["/media/Docs/B"] = []string{"read"} })
+	assertPaths(true, true)
+	change("path", func() { delete(a.grants, "/media/Docs/A") })
+	assertPaths(false, true)
+	data := make([]byte, 1)
+	if _, err := file.ReadAt(data, 0); err == nil {
+		t.Fatalf("revoked open descriptor remains readable: %q", data)
 	}
-	if data, err := io.ReadAll(open); err == nil {
-		t.Errorf("descriptor opened before revocation still readable: %q", data)
+	if names, err := dir.Readdirnames(-1); err == nil {
+		t.Fatalf("revoked open directory remains readable: %v", names)
 	}
-	for _, name := range []string{"allowed", "blocked"} {
+	change("path", func() { delete(a.grants, "/media/Docs/B") })
+	assertPaths(false, false)
+	change("agent", func() { a.owner = false })
+	assertPaths(false, false)
+	change("agent", func() {
+		a.owner = true
+		a.grants["/media/Docs/A"] = []string{"read"}
+	})
+	assertPaths(true, false)
+	change("agent", func() { a.owner = false })
+	assertPaths(false, false)
+	for _, name := range []string{"A", "B", "private"} {
 		data, err := os.ReadFile(filepath.Join(root, name, "marker"))
 		if err != nil || string(data) != name {
 			t.Errorf("backing fixture changed: %q, %v", data, err)
