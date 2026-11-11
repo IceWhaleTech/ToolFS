@@ -48,12 +48,12 @@ type PermissionProvider interface {
 // Decisions are live: the AccessSnapshots it hands out delegate every per-path
 // answer to the client's cached authority snapshot, so a revocation reaches an
 // already-mounted view the moment the change event lands — no remount, no TTL.
-// What is fixed at GrantsFor time is only the namespace projection: which
-// grant roots exist as top-level directories. A root granted after the mount
-// appears on the next remount; a root revoked merely turns dark immediately
-// (every operation under it answers ENOENT).
+// GrantsFor pairs the snapshot with public navigation entries. The daemon
+// reprojects on permission changes and periodic entries refreshes without
+// remounting; per-path decisions stay live while metadata is unavailable.
 type AuthorityPermissionProvider struct {
-	client *permission.Client
+	entries EntriesReader
+	client  *permission.Client
 
 	scopeMu         sync.Mutex
 	scopes          map[string]struct{}
@@ -65,7 +65,7 @@ type AuthorityPermissionProvider struct {
 	served map[string]*ZimaIdentity
 
 	// onChange, when set, runs after a change event has been absorbed. The
-	// daemon uses it to notice that a remount may be due.
+	// daemon uses it to reproject live mounts after a permission change.
 	onChange func(generation int64)
 }
 
@@ -73,10 +73,15 @@ type AuthorityPermissionProvider struct {
 //
 // The caller owns the client's lifecycle (Load, Watch). Most callers want
 // StartAuthorityPermissionProvider instead.
-func NewAuthorityPermissionProvider(client *permission.Client) *AuthorityPermissionProvider {
+func NewAuthorityPermissionProvider(client *permission.Client, readers ...EntriesReader) *AuthorityPermissionProvider {
+	var reader EntriesReader
+	if len(readers) != 0 {
+		reader = readers[0]
+	}
 	return &AuthorityPermissionProvider{
-		client: client,
-		served: make(map[string]*ZimaIdentity),
+		client:  client,
+		entries: reader,
+		served:  make(map[string]*ZimaIdentity),
 	}
 }
 
@@ -89,7 +94,7 @@ func NewAuthorityPermissionProvider(client *permission.Client) *AuthorityPermiss
 // every ZimaOS service consults). cachePath persists snapshots so a restart
 // answers from what it last knew instead of refusing everyone.
 func StartAuthorityPermissionProvider(ctx context.Context, runtimePath, cachePath string) *AuthorityPermissionProvider {
-	provider := &AuthorityPermissionProvider{served: make(map[string]*ZimaIdentity)}
+	provider := &AuthorityPermissionProvider{served: make(map[string]*ZimaIdentity), entries: newEntriesReader(permission.AddressIn(runtimePath))}
 
 	options := []permission.Option{
 		permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceAgent),
@@ -189,44 +194,48 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 		}
 	}
 
+	if p.entries == nil {
+		return nil, errors.New("toolfs: entries reader is not configured")
+	}
+	var entries *PermissionEntries
+	for attempt := 0; attempt < 3; attempt++ {
+		entries, err = p.entries.Entries(ctx, subject)
+		if err != nil {
+			return nil, err
+		}
+		if err = validateEntries(entries, snapshot, subject); err == nil {
+			break
+		}
+		// Snapshot's public client is event-driven. A cached generation that cannot
+		// be paired is refused, not relabelled; the next event/refresh retries it.
+		snapshot, err = p.client.Snapshot(ctx, subject)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := validateEntries(entries, snapshot, subject); err != nil {
+		return nil, err
+	}
 	p.mu.Lock()
 	p.served[subject] = identity
 	p.mu.Unlock()
 
-	// The namespace projection: every root the subject may read becomes a
-	// top-level entry. The paths keep the authority's spelling — they are both
-	// the key later decisions are asked under and the host path the root
-	// handle opens — so none of the alias folding the static path applies here.
+	// Effective read roots are witnesses/backing candidates inside entries,
+	// never independent top-level navigation. Names do not affect mapping.
 	roots := snapshot.Objects(permission.NamespacePath, permission.RelRead)
 	grants := make([]Grant, 0, len(roots))
-	homePath := homeRootPath + "/" + identity.Username
 	for i, root := range roots {
-		grant := Grant{
-			// The authority has no share-row id; the index keeps entry naming
-			// deterministic for one snapshot, which is all the id is for.
-			ID:       i + 1,
-			Path:     root,
-			ReadOnly: !snapshot.Allows(permission.NamespacePath, root, permission.RelWrite),
-		}
-		if root == homePath {
-			// The account's own home gets a fixed name and first position:
-			// dispatchers on the other side of the mount translate host home
-			// paths into the view, and that only works when the entry name
-			// cannot drift with grant order or basename collisions. A share
-			// that happens to be called Home is the one that gets suffixed.
-			grant.Name = homeEntryName
-			grants = append([]Grant{grant}, grants...)
-			continue
-		}
-		grants = append(grants, grant)
+		grants = append(grants, Grant{ID: i + 1, Path: root, ReadOnly: !snapshot.Allows(permission.NamespacePath, root, permission.RelWrite)})
 	}
 
 	return &AccessSnapshot{
-		Username:   identity.Username,
-		UserID:     identity.UserID,
-		Role:       identity.Role,
-		Grants:     grants,
-		Generation: uint64(snapshot.Generation),
+		entries:     append([]PermissionEntry{}, entries.Entries...),
+		Username:    identity.Username,
+		UserID:      identity.UserID,
+		Role:        identity.Role,
+		Grants:      grants,
+		Generation:  uint64(snapshot.Generation),
+		pathAliases: append([]permission.PathAlias(nil), snapshot.PathAliases...),
 		authority: &authorityDecider{
 			client: p.client, subject: subject,
 			userFallback: userFallback, scopeGeneration: scopeGeneration,

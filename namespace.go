@@ -47,7 +47,12 @@ type NamespaceEntry struct {
 	// relative to HostPath (its parent). Empty for a directory grant.
 	fileName string
 	// ReadOnly mirrors the grant.
-	ReadOnly bool
+	ReadOnly    bool
+	backing     os.FileInfo
+	backendPath string
+	sourcePath  string
+	retired     atomic.Bool
+	closeOnce   sync.Once
 
 	// root is the constrained handle for this entry. Every IO under this
 	// entry is issued through it, so the kernel enforces containment even if
@@ -111,7 +116,8 @@ type InstanceView struct {
 	// be rebuilt in place when the authority's grants change (reproject) while
 	// FUSE reads walk it concurrently. Decisions self-invalidate on generation,
 	// so they need no lock; the tree structure does.
-	mu sync.RWMutex
+	projectMu sync.Mutex
+	mu        sync.RWMutex
 	// root is the synthetic root of the view tree. Its children are the
 	// top-level entries (the storage spaces and /Home); grants sit at their
 	// view-path leaves, with synthetic traversal-only directories above them.
@@ -127,18 +133,19 @@ type InstanceView struct {
 
 // viewNode is one node in the projected namespace tree. An interior node is
 // synthetic — no host backing — and exists only to lead to grants beneath it.
-// A node whose entry is non-nil is a grant mounted exactly at this view path;
-// a grant node never carries synthetic children (a deeper grant under it is
-// absorbed, its refinement applied by the host-path decision trie instead).
+// A node may also hold a backing grant. Its children retain deeper effective
+// read witnesses, including navigation across a denied intermediate directory.
 type viewNode struct {
-	name     string
-	children map[string]*viewNode
-	order    []string
-	entry    *NamespaceEntry
+	name        string
+	virtualPath string
+	identity    *byte
+	children    map[string]*viewNode
+	order       []string
+	entry       *NamespaceEntry
 }
 
 func newViewNode(name string) *viewNode {
-	return &viewNode{name: name, children: map[string]*viewNode{}}
+	return &viewNode{name: name, children: map[string]*viewNode{}, identity: new(byte)}
 }
 
 // child returns a node's child by segment name.
@@ -169,12 +176,10 @@ func (n *viewNode) finalize() {
 // BuildInstanceView projects an authorization snapshot into a namespace tree.
 //
 // Each grant's host path is rewritten through the alias table into a view path
-// (see viewpath.go), then placed at that path in the tree. The segments above
-// the leaf become synthetic, traversal-only directories, shared between grants
-// that live under the same space. A grant whose view path falls under another
-// grant is absorbed — reached through its ancestor and refined by the decision
-// trie — rather than mounted twice. Grants are inserted shallowest-first so an
-// ancestor always claims its node before a descendant reaches it.
+// (see viewpath.go), then placed at that path in the tree. Authority views use
+// entries for the public prefixes instead. Ancestors without read permission
+// are synthetic traversal-only directories; deeper grants remain indexed even
+// beneath a readable backing so a denied intermediate path can be navigated.
 func BuildInstanceView(identity *ZimaIdentity, access *AccessSnapshot, caps AgentCapabilities) (*InstanceView, error) {
 	if identity == nil {
 		return nil, ErrNoIdentity
@@ -203,22 +208,23 @@ func BuildInstanceView(identity *ZimaIdentity, access *AccessSnapshot, caps Agen
 	}
 
 	// Prepare entries with their view paths, then insert shallowest-first.
-	pending := make([]*NamespaceEntry, 0, len(access.Grants))
-	for _, grant := range access.Grants {
-		vp := viewPath(grant.Path, aliases)
-		if len(viewSegments(vp)) == 0 {
-			// Maps to the view root itself — nothing to mount there. A grant on
-			// "/" or a bare stripped prefix is degenerate; skip it rather than
-			// shadow the whole tree.
-			continue
+	var pending []*NamespaceEntry
+	if access.entries != nil {
+		pending = entryGrants(access, caps)
+		aliases = nil
+		for _, metadata := range access.entries {
+			aliases = append(aliases, PathAlias{Host: access.canonicalPath(metadata.Path), View: metadata.ViewPath})
 		}
-		pending = append(pending, &NamespaceEntry{
-			GrantID:     grant.ID,
-			VirtualName: path.Base(vp),
-			ViewPath:    vp,
-			HostPath:    grant.Path,
-			ReadOnly:    grant.ReadOnly,
-		})
+		aliases = append(aliases, PathAlias{Host: access.canonicalPath("/media/Home"), View: "/Home"})
+		view.aliases = aliases
+	} else {
+		for _, grant := range access.Grants {
+			vp := viewPath(grant.Path, aliases)
+			if len(viewSegments(vp)) == 0 {
+				continue
+			}
+			pending = append(pending, &NamespaceEntry{GrantID: grant.ID, VirtualName: path.Base(vp), ViewPath: vp, HostPath: grant.Path, ReadOnly: grant.ReadOnly})
+		}
 	}
 	sort.SliceStable(pending, func(i, j int) bool {
 		di, dj := len(viewSegments(pending[i].ViewPath)), len(viewSegments(pending[j].ViewPath))
@@ -229,6 +235,12 @@ func BuildInstanceView(identity *ZimaIdentity, access *AccessSnapshot, caps Agen
 	})
 
 	for _, entry := range pending {
+		entry.sourcePath = entry.HostPath
+		entry.backendPath = entry.HostPath
+		if access.entries != nil {
+			entry.backendPath = access.backendPath(entry.HostPath)
+		}
+		entry.backing, _ = os.Lstat(entry.backendPath)
 		if view.insertGrant(entry) {
 			view.grants = append(view.grants, entry)
 		}
@@ -239,8 +251,8 @@ func BuildInstanceView(identity *ZimaIdentity, access *AccessSnapshot, caps Agen
 }
 
 // insertGrant places one grant at its view path, creating synthetic ancestors.
-// It returns false when the grant is absorbed (a shallower grant already owns a
-// node on the way down) or its path is unusable, so it should not be mounted.
+// It returns false for duplicate view paths or unusable segments. Descendant
+// witnesses are retained even when an ancestor already has a backing grant.
 func (v *InstanceView) insertGrant(entry *NamespaceEntry) bool {
 	segments := viewSegments(entry.ViewPath)
 	node := v.root
@@ -249,14 +261,10 @@ func (v *InstanceView) insertGrant(entry *NamespaceEntry) bool {
 		if name == "" {
 			return false
 		}
-		if node.entry != nil {
-			// A grant sits above this one: absorbed. Its refinement still
-			// applies through the host-path decision trie during traversal.
-			return false
-		}
 		child, ok := node.children[name]
 		if !ok {
 			child = newViewNode(name)
+			child.virtualPath = path.Join(node.virtualPath, name)
 			node.children[name] = child
 		}
 		node = child
@@ -267,10 +275,6 @@ func (v *InstanceView) insertGrant(entry *NamespaceEntry) bool {
 		// disk) — keep the first and drop this one rather than shadow.
 		return false
 	}
-	// A shallower grant landing where deeper grants already built synthetic
-	// children absorbs them (defensive: shallowest-first insertion normally
-	// prevents this).
-	node.children = map[string]*viewNode{}
 	node.entry = entry
 	return true
 }
@@ -283,7 +287,10 @@ func (v *InstanceView) insertGrant(entry *NamespaceEntry) bool {
 func (v *InstanceView) childDiverges(entry *NamespaceEntry, rel, name string) bool {
 	childHost := path.Join(entry.HostPath, rel, name)
 	expected := path.Join(entry.ViewPath, rel, name)
-	return viewPath(childHost, v.aliases) != expected
+	v.mu.RLock()
+	aliases := v.aliases
+	v.mu.RUnlock()
+	return viewPath(childHost, aliases) != expected
 }
 
 // sanitizeEntryName rejects names that could escape or shadow the namespace.
@@ -318,11 +325,18 @@ func (v *InstanceView) Entries() []string {
 		return nil
 	}
 	v.mu.RLock()
-	defer v.mu.RUnlock()
-	if v.root == nil {
+	root := v.root
+	v.mu.RUnlock()
+	if root == nil {
 		return nil
 	}
-	return v.root.childNames()
+	names := make([]string, 0)
+	for _, name := range root.order {
+		if v.nodeVisible(root.children[name]) {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // rootChild returns a top-level view node by name.
@@ -375,20 +389,24 @@ func (v *InstanceView) Resolve(relPath string) (*NamespaceEntry, string, error) 
 	}
 	segments := strings.Split(trimmed, "/")
 	node := v.root
+	var selected *NamespaceEntry
+	selectedDepth := 0
 	for i, segment := range segments {
-		if node.entry != nil {
-			return node.entry, strings.Join(segments[i:], "/"), nil
-		}
 		child, ok := node.child(segment)
 		if !ok {
-			return nil, "", ErrNotAuthorized
+			break
 		}
 		node = child
+		if node.entry != nil {
+			selected = node.entry
+			selectedDepth = i + 1
+		}
 	}
-	if node.entry != nil {
-		return node.entry, "", nil
+	if selected != nil {
+		return selected, strings.Join(segments[selectedDepth:], "/"), nil
 	}
 	return nil, "", ErrNotAuthorized
+
 }
 
 // ErrNotAuthorized is returned when a path is outside the granted namespace.
@@ -427,7 +445,13 @@ func (v *InstanceView) allowedOps(entry *NamespaceEntry, rel string) AccessOp {
 
 	generation := access.CurrentGeneration()
 
-	key := entry.VirtualName + "\x00" + rel
+	if entry.retired.Load() {
+		return 0
+	}
+	key := struct {
+		entry *NamespaceEntry
+		rel   string
+	}{entry, rel}
 	if cached, ok := v.decisions.Load(key); ok {
 		if decision := cached.(cachedDecision); decision.generation == generation {
 			return decision.ops
@@ -508,34 +532,59 @@ func validateDenyPatterns(patterns []string) error {
 // openRoots opens a constrained handle per entry. Callers must call
 // closeRoots when the view is retired.
 func (v *InstanceView) openRoots() error {
-	backend := newSecureBackend()
 	for _, entry := range v.grants {
-		// A grant on a single file cannot be a root — a root must be a directory.
-		// Open the file's parent instead and expose just that file; the entry
-		// keeps its own view path, so nothing about the projection changes.
-		if info, err := os.Stat(entry.HostPath); err == nil && !info.IsDir() {
-			entry.fileName = path.Base(entry.HostPath)
-			entry.HostPath = path.Dir(entry.HostPath)
-		}
-		root, err := backend.OpenRoot(entry.HostPath)
-		if err != nil {
+		if err := v.openEntry(entry); err != nil {
 			v.closeRoots()
-			return fmt.Errorf("toolfs: cannot open grant root %q: %w", entry.HostPath, err)
+			return err
 		}
-		entry.root = root
+	}
+	return nil
+}
 
-		// Read-only grants get no protection area: nothing can be deleted or
-		// overwritten through them, so there is nothing to preserve, and
-		// creating state directories under a read-only grant would be the only
-		// write ToolFS ever made there.
-		if !entry.ReadOnly {
-			protection, err := newBoundProtection(root, v.Policy)
-			if err != nil {
-				v.closeRoots()
-				return fmt.Errorf("toolfs: cannot prepare protection for %q: %w", entry.HostPath, err)
-			}
-			entry.protection = protection
+func (v *InstanceView) openEntry(entry *NamespaceEntry) error {
+	physical := entry.backendPath
+	if physical == "" {
+		physical = entry.HostPath
+	}
+	if entry.backing == nil || entry.backing.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("toolfs: invalid grant backing %q", physical)
+	}
+	directory := physical
+	if !entry.backing.IsDir() {
+		if !entry.backing.Mode().IsRegular() {
+			return fmt.Errorf("toolfs: non-regular grant %q", physical)
 		}
+		entry.fileName = path.Base(entry.HostPath)
+		entry.HostPath = path.Dir(entry.HostPath)
+		directory = path.Dir(physical)
+	}
+	root, err := newSecureBackend().OpenRoot(directory)
+	if err != nil {
+		return fmt.Errorf("toolfs: cannot open grant root %q: %w", physical, err)
+	}
+	rel := ""
+	if entry.fileName != "" {
+		rel = path.Base(physical)
+	}
+	info, err := root.Stat(rel)
+	if err != nil || !os.SameFile(info, entry.backing) {
+		_ = root.Close()
+		return fmt.Errorf("toolfs: grant backing changed: %q", physical)
+	}
+	entry.root = root
+
+	// Read-only grants get no protection area: nothing can be deleted or
+	// overwritten through them, so there is nothing to preserve, and
+	// creating state directories under a read-only grant would be the only
+	// write ToolFS ever made there.
+	if !entry.ReadOnly {
+		protection, err := newBoundProtection(root, v.Policy)
+		if err != nil {
+			_ = root.Close()
+			entry.root = nil
+			return fmt.Errorf("toolfs: cannot prepare protection for %q: %w", entry.HostPath, err)
+		}
+		entry.protection = protection
 	}
 	return nil
 }
@@ -545,12 +594,7 @@ func (v *InstanceView) closeRoots() {
 	if v == nil {
 		return
 	}
-	for _, entry := range v.grants {
-		if entry.root != nil {
-			_ = entry.root.Close()
-			entry.root = nil
-		}
-	}
+	closeGrants(v.grants)
 }
 
 // BuildInstanceViewForUser resolves identity, pulls grants and projects them.
@@ -605,70 +649,98 @@ func (v *InstanceView) reproject(next *InstanceView) (bool, error) {
 	if v == nil || next == nil {
 		return false, nil
 	}
-	same := v.sameGrants(next)
-	// Open the new roots before publishing them; on failure keep the old
-	// projection so a transient error never breaks a live mount.
-	if !same {
-		if err := next.openRoots(); err != nil {
+	v.projectMu.Lock()
+	defer v.projectMu.Unlock()
+	old := v.Grants()
+	byPath := make(map[string]*NamespaceEntry, len(old))
+	for _, entry := range old {
+		byPath[entry.ViewPath] = entry
+	}
+	reused := make(map[*NamespaceEntry]bool)
+	replacements := make(map[*NamespaceEntry]*NamespaceEntry)
+	var opened []*NamespaceEntry
+	for i, entry := range next.grants {
+		previous := byPath[entry.ViewPath]
+		if sameEntry(previous, entry) {
+			reused[previous] = true
+			replacements[entry] = previous
+			next.grants[i] = previous
+			continue
+		}
+		if err := next.openEntry(entry); err != nil {
+			closeGrants(opened)
 			return false, err
 		}
+		opened = append(opened, entry)
 	}
+	var retired []*NamespaceEntry
+	for _, entry := range old {
+		if !reused[entry] {
+			retired = append(retired, entry)
+		}
+	}
+	changed := len(opened) != 0 || len(retired) != 0
 	v.mu.Lock()
-	oldGrants := v.grants
-	if !same {
-		v.root = next.root
-		v.grants = next.grants
+	{
+		mergeViewTree(v.root, next.root, replacements)
+		for _, entry := range retired {
+			entry.retired.Store(true)
+		}
+		v.root, v.grants = next.root, next.grants
 	}
 	// Even unchanged roots need the new declaration-generation decider.
-	v.Access = next.Access
-	v.Generation = next.Generation
+	v.Access, v.Generation, v.aliases = next.Access, next.Generation, next.aliases
 	v.mu.Unlock()
-
-	// Old keys may now point at replaced entries; clear rather than reason about
-	// per-key validity. Answers self-invalidate on generation regardless.
 	v.decisions.Range(func(k, _ any) bool { v.decisions.Delete(k); return true })
 	v.decisionCount.Store(0)
-
-	// Release the old descriptors after a grace period. Already-open files hold
-	// their own fds and are unaffected; only an in-flight openat could race.
-	if !same {
-		time.AfterFunc(closeGrace, func() { closeGrants(oldGrants) })
+	if len(retired) != 0 {
+		time.AfterFunc(closeGrace, func() { closeGrants(retired) })
 	}
-	return !same, nil
+	return changed, nil
 }
 
-// sameGrants reports whether two projections grant the same paths at the same
-// access, so an unchanged mount can skip the rebuild.
-func (v *InstanceView) sameGrants(next *InstanceView) bool {
-	v.mu.RLock()
-	sig := grantSignature(v.grants)
-	v.mu.RUnlock()
-	return sig == grantSignature(next.grants)
+func sameEntry(old, next *NamespaceEntry) bool {
+	if old == nil || old.retired.Load() || old.ViewPath != next.ViewPath ||
+		old.sourcePath != next.sourcePath || old.ReadOnly != next.ReadOnly {
+		return false
+	}
+	return old.backendPath == next.backendPath && old.backing != nil && next.backing != nil && os.SameFile(old.backing, next.backing)
 }
 
-// grantSignature keys a projection on its grants' view paths and read-only
-// verdicts. View path is stable (openRoots rewrites HostPath for file grants but
-// never ViewPath), so it identifies a grant across a rebuild; read-only is
-// included so a read↔write change also triggers a reproject.
-func grantSignature(grants []*NamespaceEntry) string {
-	parts := make([]string, 0, len(grants))
-	for _, g := range grants {
-		ro := "rw"
-		if g.ReadOnly {
-			ro = "ro"
+// Immutable trees share stable synthetic identities, not mutable child maps.
+// Held FUSE nodes resolve that identity through the current tree on every call.
+func mergeViewTree(old, next *viewNode, replacements map[*NamespaceEntry]*NamespaceEntry) {
+	if replacement := replacements[next.entry]; replacement != nil {
+		next.entry = replacement
+	}
+	if old != nil && old.entry == next.entry {
+		next.identity = old.identity
+	}
+	for name, child := range next.children {
+		var previous *viewNode
+		if old != nil {
+			previous = old.children[name]
 		}
-		parts = append(parts, g.ViewPath+"\x00"+ro)
+		mergeViewTree(previous, child, replacements)
 	}
-	sort.Strings(parts)
-	return strings.Join(parts, "\x01")
 }
 
-// closeGrants releases the descriptors held by a set of grant entries.
+func (v *InstanceView) currentSynthetic(held *viewNode) *viewNode {
+	node := v.nodeAt(held.virtualPath)
+	if node == nil || node.identity != held.identity || !v.nodeVisible(node) {
+		return nil
+	}
+	return node
+}
+
+// closeGrants is idempotent without mutating a handle concurrently read by
+// in-flight requests. Root.Close itself safely terminates constrained I/O.
 func closeGrants(grants []*NamespaceEntry) {
 	for _, entry := range grants {
-		if entry.root != nil {
-			_ = entry.root.Close()
-			entry.root = nil
-		}
+		entry.closeOnce.Do(func() {
+			if entry.root != nil {
+				_ = entry.root.Close()
+			}
+		})
 	}
 }

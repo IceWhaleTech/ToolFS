@@ -86,25 +86,13 @@ func newBoundProtection(root RootHandle, policy ProtectionPolicy) (*boundProtect
 	return p, nil
 }
 
-// probeClone determines whether extent sharing works, by trying it on a tiny
-// file inside the state area.
-//
-// Probing beats inferring from the filesystem type: reflink depends on how the
-// volume was made and mounted, not only on which filesystem it is.
+// probeClone is separate from content preservation: a successful full copy
+// must not lift the size/space ceilings reserved for shared extents.
 func (p *boundProtection) probeClone() bool {
-	const src = toolfsStateDir + "/.clone-probe"
-	const dst = toolfsStateDir + "/.clone-probe-copy"
-
-	defer func() {
-		_ = p.root.Remove(src)
-		_ = p.root.Remove(dst)
-	}()
-
-	if err := p.root.WriteFile(src, []byte{0}, 0o600); err != nil {
-		return false
+	if probe, ok := p.root.(interface{ cloneAvailable() bool }); ok {
+		return probe.cloneAvailable()
 	}
-	_ = p.root.Remove(dst)
-	return p.root.CloneFile(src, dst, 0o600) == nil
+	return false
 }
 
 // CloneSupported reports whether versions are stored by extent sharing.

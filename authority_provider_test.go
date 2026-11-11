@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,11 +24,14 @@ import (
 
 // fakeAuthority serves /v2/permissions/snapshot and /events from mutable state.
 type fakeAuthority struct {
-	mu         sync.Mutex
-	generation int64
-	allow      map[string][]string // object → relations
-	deny       map[string][]string
-	events     chan int64
+	mu            sync.Mutex
+	generation    int64
+	allow         map[string][]string // object → relations
+	deny          map[string][]string
+	events        chan int64
+	pathAliases   []permission.PathAlias
+	entries       []PermissionEntry
+	entriesStatus int
 }
 
 func newFakeAuthority() *fakeAuthority {
@@ -51,19 +56,35 @@ func (a *fakeAuthority) serve(t *testing.T) *httptest.Server {
 			Relations []string `json:"relations"`
 		}
 		var allow, deny []grant
+		canonical := &permission.Snapshot{PathAliases: a.pathAliases}
 		for object, relations := range a.allow {
-			allow = append(allow, grant{Object: object, Relations: relations})
+			allow = append(allow, grant{Object: canonical.CanonicalPath(object), Relations: relations})
 		}
 		for object, relations := range a.deny {
-			deny = append(deny, grant{Object: object, Relations: relations})
+			deny = append(deny, grant{Object: canonical.CanonicalPath(object), Relations: relations})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
-			"subject":    map[string]string{"namespace": "user", "id": "7"},
-			"generation": a.generation,
+			"subject":      map[string]string{"namespace": "user", "id": "7"},
+			"generation":   a.generation,
+			"path_aliases": a.pathAliases,
 			"namespaces": map[string]any{
 				"path": map[string]any{"allow": allow, "deny": deny},
 			},
 		}})
+	})
+
+	mux.HandleFunc("/v2/permissions/entries", func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.entriesStatus != 0 {
+			http.Error(w, "unavailable", a.entriesStatus)
+			return
+		}
+		entries := a.entries
+		if entries == nil {
+			entries = fixturePermissionEntries(a.allow, a.pathAliases)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": PermissionEntries{Subject: permission.Subject{Namespace: "user", ID: "7"}, Generation: a.generation, Entries: entries}})
 	})
 
 	mux.HandleFunc("/v2/permissions/events", func(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +132,7 @@ func startProvider(t *testing.T, authority *fakeAuthority) *AuthorityPermissionP
 		permission.WithWatchNamespaces(permission.NamespacePath),
 		permission.WithChangeHandler(func(generation int64) { provider.handleChange(generation) }),
 	)
-	provider = NewAuthorityPermissionProvider(client)
+	provider = NewAuthorityPermissionProvider(client, newEntriesReader(func() string { return server.URL }))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -233,4 +254,43 @@ func TestAuthorityProviderFailsClosed(t *testing.T) {
 	if _, err := provider.GrantsFor(context.Background(), &ZimaIdentity{Username: "alice", UserID: 7}, ""); err == nil {
 		t.Fatal("an authority error produced a snapshot instead of an error")
 	}
+}
+
+func fixturePermissionEntries(allow map[string][]string, aliases []permission.PathAlias) []PermissionEntry {
+	entries := []PermissionEntry{}
+	seen := map[string]bool{}
+	snapshot := &permission.Snapshot{PathAliases: aliases}
+	home := snapshot.CanonicalPath("/media/Home")
+	for raw, relations := range allow {
+		readable := false
+		for _, r := range relations {
+			if r == "read" {
+				readable = true
+			}
+		}
+		if !readable {
+			continue
+		}
+		host := snapshot.CanonicalPath(raw)
+		var entry PermissionEntry
+		if isPathUnder(host, home) {
+			entry = PermissionEntry{Kind: "home", Name: "Home", Path: "/media/Home", ViewPath: "/Home", DefaultPath: "/media/Home/alice"}
+		} else {
+			if !strings.HasPrefix(host, "/media/") {
+				continue
+			}
+			name := strings.Split(strings.TrimPrefix(host, "/media/"), "/")[0]
+			if name == "" || name == "Home" {
+				continue
+			}
+			entry = PermissionEntry{Kind: "storage", Name: name, Path: "/media/" + name, ViewPath: "/" + name, DefaultPath: "/media/" + name}
+		}
+		if seen[entry.Path] {
+			continue
+		}
+		seen[entry.Path] = true
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ViewPath < entries[j].ViewPath })
+	return entries
 }

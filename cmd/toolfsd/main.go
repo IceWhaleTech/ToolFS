@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/IceWhaleTech/toolfs"
 )
@@ -82,6 +83,18 @@ func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
 	// remount. Only mounts whose grant set actually changed are rebuilt.
 	provider.OnChange(func(int64) { mounts.Reproject(ctx) })
 
+	refreshCtx, cancelRefresh := context.WithCancel(ctx)
+	refreshDone := make(chan struct{})
+	go func() {
+		defer close(refreshDone)
+		mounts.WatchStorage(refreshCtx, 5*time.Second)
+	}()
+	stopRefresh := func() {
+		cancelRefresh()
+		<-refreshDone
+	}
+	defer stopRefresh()
+
 	control := toolfs.NewControlServer(mounts, socketPath)
 	if err := control.Listen(); err != nil {
 		return fmt.Errorf("cannot listen on %s: %w", socketPath, err)
@@ -99,10 +112,13 @@ func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
 	// mounts whose server is gone, which consumers see as ENOTCONN.
 	select {
 	case err := <-serveErr:
+		stop()
+		stopRefresh()
 		_ = control.Close()
 		_ = mounts.Close()
 		return err
 	case <-ctx.Done():
+		stopRefresh()
 		log.Printf("toolfsd: shutting down, unmounting %d mount(s)", len(mounts.List()))
 		_ = control.Close()
 		if err := mounts.Close(); err != nil {

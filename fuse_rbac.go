@@ -22,6 +22,9 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"os"
+	"path"
+	"sort"
 	"syscall"
 	"time"
 
@@ -276,7 +279,10 @@ func childInode(
 ) (*gofs.Inode, syscall.Errno) {
 	out.SetEntryTimeout(0)
 	out.SetAttrTimeout(0)
-	if node.entry != nil {
+	if !view.nodeVisible(node) {
+		return nil, syscall.ENOENT
+	}
+	if node.entry != nil && view.Allows(node.entry, node.entry.fileName, OpRead) {
 		entry := node.entry
 		if entry.fileName != "" {
 			// A grant on a single file: the leaf is the file itself, served from
@@ -288,10 +294,15 @@ func childInode(
 			}
 			child := &instanceFile{view: view, entry: entry, rel: entry.fileName}
 			out.Mode = syscall.S_IFREG | fileMode(entry)
-			if info, err := entry.root.Stat(entry.fileName); err == nil {
-				out.Size = uint64(info.Size())
-				stampAttrTimes(&out.Attr, info)
+			info, err := entry.root.Stat(entry.fileName)
+			if err != nil {
+				return nil, errnoFor(err)
 			}
+			if !info.Mode().IsRegular() {
+				return nil, syscall.ENOENT
+			}
+			out.Size = uint64(info.Size())
+			stampAttrTimes(&out.Attr, info)
 			return parent.NewInode(ctx, child, gofs.StableAttr{Mode: syscall.S_IFREG}), 0
 		}
 		if !view.Allows(entry, "", OpList) {
@@ -330,6 +341,9 @@ var (
 )
 
 func (d *synthDir) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	if d.view.currentSynthetic(d.node) == nil {
+		return syscall.ENOENT
+	}
 	out.Mode = syscall.S_IFDIR | 0o555
 	stampVirtualTimes(&out.Attr, d.view)
 	out.SetTimeout(d.view.CacheTimeout)
@@ -337,13 +351,20 @@ func (d *synthDir) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.At
 }
 
 func (d *synthDir) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errno) {
-	names := d.node.childNames()
+	node := d.view.currentSynthetic(d.node)
+	if node == nil {
+		return nil, syscall.ENOENT
+	}
+	names := node.childNames()
 	entries := make([]fuse.DirEntry, 0, len(names))
 	for _, name := range names {
+		if !d.view.nodeVisible(node.children[name]) {
+			continue
+		}
 		mode := uint32(syscall.S_IFDIR)
 		// A child that is a grant on a single file lists as a regular file, not
 		// a directory; everything else is a directory (a grant dir or synthetic).
-		if child, ok := d.node.child(name); ok && child.entry != nil && child.entry.fileName != "" {
+		if child, ok := node.child(name); ok && child.entry != nil && child.entry.fileName != "" {
 			mode = syscall.S_IFREG
 		}
 		entries = append(entries, fuse.DirEntry{Name: name, Mode: mode})
@@ -352,7 +373,11 @@ func (d *synthDir) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errno) 
 }
 
 func (d *synthDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofs.Inode, syscall.Errno) {
-	child, ok := d.node.child(name)
+	node := d.view.currentSynthetic(d.node)
+	if node == nil {
+		return nil, syscall.ENOENT
+	}
+	child, ok := node.child(name)
 	if !ok {
 		return nil, syscall.ENOENT
 	}
@@ -375,40 +400,55 @@ var (
 )
 
 func (d *instanceDir) Readdir(ctx context.Context) (gofs.DirStream, syscall.Errno) {
-	if !d.view.Allows(d.entry, d.rel, OpList) {
+	if d.entry.retired.Load() {
 		return nil, syscall.ENOENT
 	}
-	items, err := d.entry.root.ReadDir(d.rel)
-	if err != nil {
-		return nil, errnoFor(err)
+	node := d.view.nodeAt(path.Join(d.entry.ViewPath, d.rel))
+	readable := d.view.Allows(d.entry, d.rel, OpList)
+	if !readable && !d.view.nodeVisible(node) {
+		return nil, syscall.ENOENT
 	}
-
-	entries := make([]fuse.DirEntry, 0, len(items))
-	for _, item := range items {
-		childRel := joinRel(d.rel, item.Name())
-		// The protection area is not part of the namespace: exposing it would
-		// let an agent read content that was deleted precisely to protect it.
-		if isReservedRel(childRel) {
-			continue
+	entries := map[string]fuse.DirEntry{}
+	if readable {
+		items, err := d.entry.root.ReadDir(d.rel)
+		if err != nil {
+			return nil, errnoFor(err)
 		}
-		// A child the alias table relocates elsewhere is not shown here: .home
-		// under a /DATA grant belongs to /Home, so /ZimaOS-HD must not also
-		// expose it. Its canonical location lists it.
-		if d.view.childDiverges(d.entry, d.rel, item.Name()) {
-			continue
+		for _, item := range items {
+			childRel := joinRel(d.rel, item.Name())
+			if isReservedRel(childRel) || d.view.childDiverges(d.entry, d.rel, item.Name()) || item.Type()&os.ModeSymlink != 0 || !d.view.Allows(d.entry, childRel, OpRead) {
+				continue
+			}
+			mode := uint32(syscall.S_IFREG)
+			if item.IsDir() {
+				mode = syscall.S_IFDIR
+			}
+			entries[item.Name()] = fuse.DirEntry{Name: item.Name(), Mode: mode}
 		}
-		// Hide anything the current grants do not cover, so a nested
-		// read-only or denied subtree is not even enumerated.
-		if !d.view.Allows(d.entry, childRel, OpRead) {
-			continue
-		}
-		mode := uint32(syscall.S_IFREG)
-		if item.IsDir() {
-			mode = syscall.S_IFDIR
-		}
-		entries = append(entries, fuse.DirEntry{Name: item.Name(), Mode: mode})
 	}
-	return gofs.NewListDirStream(entries), 0
+	if node != nil {
+		for _, name := range node.order {
+			child := node.children[name]
+			if !d.view.nodeVisible(child) {
+				continue
+			}
+			mode := uint32(syscall.S_IFDIR)
+			if child.entry != nil && child.entry.fileName != "" {
+				mode = syscall.S_IFREG
+			}
+			entries[name] = fuse.DirEntry{Name: name, Mode: mode}
+		}
+	}
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]fuse.DirEntry, 0, len(names))
+	for _, name := range names {
+		out = append(out, entries[name])
+	}
+	return gofs.NewListDirStream(out), 0
 }
 
 func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*gofs.Inode, syscall.Errno) {
@@ -421,7 +461,15 @@ func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if d.view.childDiverges(d.entry, d.rel, name) {
 		return nil, syscall.ENOENT
 	}
+	projected := d.view.nodeAt(path.Join(d.entry.ViewPath, childRel))
+	if !d.entry.retired.Load() && projected != nil && projected.entry != nil && d.view.nodeVisible(projected) {
+		return childInode(ctx, &d.Inode, d.view, projected, out)
+	}
 	if !d.view.Allows(d.entry, childRel, OpRead) {
+		child := d.view.nodeAt(path.Join(d.entry.ViewPath, childRel))
+		if !d.entry.retired.Load() && d.view.nodeVisible(child) {
+			return childInode(ctx, &d.Inode, d.view, child, out)
+		}
 		return nil, syscall.ENOENT
 	}
 
@@ -433,6 +481,9 @@ func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	out.SetEntryTimeout(0)
 	out.SetAttrTimeout(0)
 
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, syscall.ENOENT
+	}
 	if info.IsDir() {
 		child := &instanceDir{view: d.view, entry: d.entry, rel: childRel, backing: info}
 		out.Mode = syscall.S_IFDIR | entryMode(d.entry)
@@ -440,6 +491,9 @@ func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		return directoryInode(ctx, &d.Inode, d.view, name, child), 0
 	}
 
+	if !info.Mode().IsRegular() {
+		return nil, syscall.ENOENT
+	}
 	child := &instanceFile{view: d.view, entry: d.entry, rel: childRel}
 	out.Mode = syscall.S_IFREG | fileMode(d.entry)
 	out.Size = uint64(info.Size())
@@ -449,7 +503,13 @@ func (d *instanceDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 
 func (d *instanceDir) Getattr(ctx context.Context, fh gofs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	if !d.view.Allows(d.entry, d.rel, OpList) {
-		return syscall.ENOENT
+		if d.entry.retired.Load() || !d.view.nodeVisible(d.view.nodeAt(path.Join(d.entry.ViewPath, d.rel))) {
+			return syscall.ENOENT
+		}
+		out.Mode = syscall.S_IFDIR | 0o555
+		stampVirtualTimes(&out.Attr, d.view)
+		out.SetTimeout(0)
+		return 0
 	}
 	out.Mode = syscall.S_IFDIR | entryMode(d.entry)
 	if info, err := d.entry.root.Stat(d.rel); err == nil {
@@ -479,6 +539,9 @@ func (f *instanceFile) Getattr(ctx context.Context, fh gofs.FileHandle, out *fus
 	info, err := f.entry.root.Stat(f.rel)
 	if err != nil {
 		return errnoFor(err)
+	}
+	if !info.Mode().IsRegular() {
+		return syscall.ENOENT
 	}
 	out.Mode = syscall.S_IFREG | fileMode(f.entry)
 	out.Size = uint64(info.Size())

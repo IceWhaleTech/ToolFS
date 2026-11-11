@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+
+	"github.com/IceWhaleTech/ZimaOS-Common/permission"
 )
 
 // AccessOp is a bitmask of the actions ToolFS distinguishes for access control.
@@ -123,7 +125,9 @@ type AccessSnapshot struct {
 	// root); what an operation may do under them is decided against the
 	// authority's current state, so a revocation reaches an existing mount
 	// without a remount.
-	authority *authorityDecider
+	authority   *authorityDecider
+	pathAliases []permission.PathAlias
+	entries     []PermissionEntry
 }
 
 // CurrentGeneration is what decision memos must key on.
@@ -368,3 +372,7 @@ type snapshotHolder struct {
 func (h *snapshotHolder) load() *AccessSnapshot { return h.ptr.Load() }
 
 func (h *snapshotHolder) store(s *AccessSnapshot) { h.ptr.Store(s) }
+
+func (s *AccessSnapshot) canonicalPath(host string) string {
+	return (&permission.Snapshot{PathAliases: s.pathAliases}).CanonicalPath(host)
+}

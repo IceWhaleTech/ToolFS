@@ -48,6 +48,7 @@ type MountSet struct {
 	resolver IdentityResolver
 	provider PermissionProvider
 
+	reprojectMu sync.Mutex
 	lifecycleMu sync.Mutex
 	mu          sync.Mutex
 	mounts      map[string]*liveMount
@@ -203,6 +204,12 @@ func (s *MountSet) Mount(ctx context.Context, agentUserID, app string, identity 
 // only if its grant set actually changed, so an unrelated device-wide change
 // costs one comparison per mount.
 func (s *MountSet) Reproject(ctx context.Context) {
+	s.reproject(ctx)
+}
+
+func (s *MountSet) reproject(ctx context.Context) {
+	s.reprojectMu.Lock()
+	defer s.reprojectMu.Unlock()
 	s.mu.Lock()
 	live := make([]*liveMount, 0, len(s.mounts))
 	for _, m := range s.mounts {
@@ -213,6 +220,9 @@ func (s *MountSet) Reproject(ctx context.Context) {
 	s.mu.Unlock()
 
 	for _, m := range live {
+		if ctx.Err() != nil {
+			return
+		}
 		view := m.handle.View()
 		if view == nil {
 			continue

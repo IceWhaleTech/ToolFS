@@ -52,6 +52,17 @@ func newAgentScopeProvider(t *testing.T) (*AuthorityPermissionProvider, *agentSc
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": permission.Snapshot{Subject: permission.Subject{Namespace: ns, ID: id}, Generation: a.generation, Namespaces: map[string]permission.NamespaceSnapshot{"path": {Allow: roots}}}})
 	})
+	mux.HandleFunc("/v2/permissions/entries", func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		subject := r.URL.Query().Get("subject")
+		ns, id := "user", "7"
+		if subject != "user:7" {
+			ns, id = "agent", "7:photos"
+		}
+		entries := fixturePermissionEntries(map[string][]string{a.root: {"read"}}, nil)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": PermissionEntries{Subject: permission.Subject{Namespace: ns, ID: id}, Generation: a.generation, Entries: entries}})
+	})
 	mux.HandleFunc("/v2/permissions/tuples", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -97,7 +108,7 @@ func newAgentScopeProvider(t *testing.T) (*AuthorityPermissionProvider, *agentSc
 	t.Cleanup(server.Close)
 	var p *AuthorityPermissionProvider
 	client := permission.New(func() string { return server.URL }, permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceAgent), permission.WithChangeHandler(func(g int64) { p.handleChange(g) }))
-	p = NewAuthorityPermissionProvider(client)
+	p = NewAuthorityPermissionProvider(client, newEntriesReader(func() string { return server.URL }))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); client.Watch(ctx) }()
@@ -239,12 +250,19 @@ func TestAgentScopeDeclarationCacheIsSharedAcrossApps(t *testing.T) {
 func TestUnscopedAppReprojectionRefreshesUnchangedRoots(t *testing.T) {
 	p, a := newAgentScopeProvider(t)
 	a.change(t, p, "agent", func() { a.owner, a.pathDeclared, a.read = false, false, false })
+	base := t.TempDir()
+	a.change(t, p, "path", func() { a.root = base })
 	identity := &ZimaIdentity{Username: "alice", UserID: 7}
 	access := scopeAccess(t, p, "photos")
-	view, err := BuildInstanceView(identity, access, AgentCapabilities{})
+	access.entries = nil
+	view, err := BuildInstanceView(identity, access, AgentCapabilities{ViewAliases: []PathAlias{{Host: base, View: "/Docs"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := view.openRoots(); err != nil {
+		t.Fatal(err)
+	}
+	defer view.closeRoots()
 	entry, _, err := view.Resolve("Docs")
 	if err != nil || entry == nil || !view.Allows(entry, "marker", OpRead) {
 		t.Fatal("legacy view did not initially allow the user grant")
@@ -255,7 +273,9 @@ func TestUnscopedAppReprojectionRefreshesUnchangedRoots(t *testing.T) {
 	if view.Allows(entry, "marker", OpRead) {
 		t.Fatal("old fallback did not fail closed before reprojection")
 	}
-	fresh, err := BuildInstanceView(identity, scopeAccess(t, p, "photos"), AgentCapabilities{})
+	freshAccess := scopeAccess(t, p, "photos")
+	freshAccess.entries = nil
+	fresh, err := BuildInstanceView(identity, freshAccess, AgentCapabilities{ViewAliases: []PathAlias{{Host: base, View: "/Docs"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

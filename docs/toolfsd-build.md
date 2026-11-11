@@ -69,6 +69,32 @@ build/sysroot/
 `/run/toolfs` 在服务停止或重启时保留，避免删除 Agent Management 在同一目录下管理的实例 socket。
 Agent Management 提交已验证的 ZimaOS 身份时，无需额外的账号绑定文件；未提供身份且未配置绑定的请求会被拒绝。
 
+## 运行中的存储视图
+
+每个用户/app 的实际布局为 `/run/toolfs/mounts/u<uid>/<app>/workspace`。
+`<app>` 是稳定的普通 bind source，`workspace` 才是 FUSE；app 为空时省略这一层。
+`/var/run` 在常规 ZimaOS 系统中链接到 `/run`，以服务的 `-root` 实际配置为准。
+
+权限来自 UserService 选定主体的 snapshot；导航范围来自同主体、同 generation 的
+`GET /v2/permissions/entries`，没有管理员绕过，也不在 ToolFS 扫描 `/media`。
+Home 唯一入口映射到 `workspace/Home/<用户名>/...`，storage 只给出盘根，深层分享
+按盘根逐层导航。只导航祖先不枚举真实目录，不赋予写删权限。
+`/var/log` 等盘外 grant 不出现在用户视图。
+
+权限事件立即重投影；5 秒周期重新读取 entries，在 generation 不变时刷新增删盘。
+未变 entry、根句柄与 inode 复用；同名后端换对象会退休旧 entry。metadata 失败保留
+最后完整结构以便恢复，文件和导航名称仍按实时权限过滤，不退回本地扫描。
+标准根 alias 仅根据 authority 的等价声明选择 backing，数据 symlink 不跟随。
+容器启动时建立的顶层便捷 symlink 不由该循环更新，新盘以 workspace 路径为准。
+
+必须先部署支持 entries 的 UserService，再部署 ToolFS；旧 UserService 缺该 API 时
+初次挂载失败。`default_path` 给 UI 默认进入本人 Home 并返回集合使用，本轮不改
+Agent Management 容器工作目录，Files/UI 也未切换。
+本地已实现两端 API 契约、投影与 fd-relative no-follow 后端；根 `..`、并发替换、
+clone 固定 fd 降级等边界有测试覆盖。硬链接身份隔离不在保证范围内。
+**Linux 真实 FUSE 挂载及设备联调尚未验收；本地测试与交叉构建通过不代表可直接
+发布。Files/UI 尚未切换。**
+
 ## 本地验证
 
 先为私有 Go 依赖配置 Git 读取凭据，并安装 FUSE、Go 1.25、GoReleaser v2、curl 和 binutils：

@@ -35,7 +35,7 @@ func sameDirectory(old, next gofs.InodeEmbedder) bool {
 			a.backing != nil && b.backing != nil && os.SameFile(a.backing, b.backing)
 	case *synthDir:
 		b, ok := next.(*synthDir)
-		return ok && a.view == b.view && a.node == b.node
+		return ok && a.view == b.view && a.node.identity == b.node.identity
 	case *controlDir:
 		b, ok := next.(*controlDir)
 		return ok && a.view == b.view

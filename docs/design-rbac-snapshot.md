@@ -2344,17 +2344,62 @@ Linux 真机全量 PASS。
 - **btrfs 快照**（§7.5–7.7）：范围外的可选增强，`/DATA` 是 ext4 用不上
 - **审计落盘**：`AuditLogger` 接口在，但受保护变更目前只写变更日志，未落独立审计文件（§9）
 - ~~权限判定缓存~~ → **已实现**：按 `(条目, 相对路径)` 记忆化，并按 generation 自校验失效
-- **撤权的主动失效**：现为 TTL 到期后重建视图；`NotifyEntry`/`NotifyContent` 尚未接入
+- **内核缓存的主动通知**：权限事件已实时重投影，旧节点也逐操作校验；`NotifyEntry`/`NotifyContent` 尚未接入。不能把缺少内核通知误写为权限只靠 TTL 生效。
 - **回收站与版本的保留策略**：`MinFreeBytes` 已用于降级判断，但定时清理（`PurgeTrash`）尚未实现——回收站的 rename 不释放空间，长期运行必须补上
-- **`FilesServiceProvider` 的真实联调**：上游逐行 Grant 接口未就绪，当前以
-  `StaticPermissionProvider` 与 httptest 桩覆盖；端点路径 `/v2_1/files/users/{u}/grants`
-  是**假定值**，需与 IceWhale-Files 对齐
+- **设备联调**：生产 provider 已改用 UserService snapshot + entries，不再依赖
+  前文历史设计的 Files 逐行 Grant 接口。HTTP 契约及 FUSE 节点已有本地测试，
+  Linux 真实挂载与设备验收仍未完成。
 - **保护区的多通路排除**：`.toolfs-state` 已对 FUSE 隐藏，但**尚未从 SMB 与 Files API
   排除**。不做这一步，被删内容可经其他通路读回——这是 §15.2 第 7 条那个设计修正
   带来的连带要求，必须在联调清单里
 
-**Agent 收窄的两处已知边界**（收窄本身已落地：`permission_provider.go` 按 `agent:<userId>:<app>` 快照投影，读/写由 `allowedOps` 落地；见 UserService `docs/rbac-design.md` §7.3）：
+**Agent 主体选择与刷新**（见 UserService `docs/rbac-design.md` §7.3）：
 
-- **视图随 generation 实时重投影（原「挂载时绑定」的活性局限，已解决）**：`handleChange` 现在除重热决策外，还调 `MountSet.Reproject` 逐挂载重建视图——重跑 `BuildInstanceViewForIdentity`（内含 `GrantsFor` 的 user↔agent **主体重选**）得到当前授权的新树，受 `InstanceView.mu`（RWMutex）保护地**原地换进同一个 `InstanceView`**（FUSE 节点持有的指针不变、无需重挂），旧 grant 句柄宽限期后关闭；授权集未变则 no-op。因此**授权增删、首次给运行中实例加收窄、以及别人撤销给你的分享，都实时生效、无需重挂**，撤销分享后也不再残留幽灵祖先目录。（blue 早前的「保存 scope 后主动 release 重挂」因此退为冗余的兜底。）叶子的读/写/删决策一直是实时的（`allowedOps` 按 generation 自失效）；本改动补上的是**视图树结构**的实时性。
-- **空白名单无法表达「什么都不给」（表达力缺口）**：主体选择的判据是「agent 快照有 ≥1 条 path-read 授权 ⇒ 投影 agent、收窄；否则 ⇒ 回退用户全量视图」。故清空 agent 授权读作「未收窄」→ 全量，而非「锁死」。要把 agent 关到零访问，需另给信号（如一条显式的空 scope 标记），当前模型表达不了。
+- 显式声明 owner 的 Agent 始终用 Agent 有效快照，即使 read 为空也不回退用户；
+  只有真正未声明的 legacy app 才回退。声明查询失败时拒绝，不把失败当未声明。
+- 权限事件重热当前主体，并触发串行重选主体、原地重投影。因此首次收窄运行中
+  实例、授权增删与撤销分享无需重挂。旧 legacy 决策绑定声明 generation，不能在
+  事件后、重投影完成前恢复宽权限。无变化的 backing/inode 继续复用。
 
+### 15.9 公共入口与逐层导航（2026-11-11，本地实现完成，待真实挂载验收）
+
+实际宿主布局是 `/run/toolfs/mounts/u<uid>/<app>/workspace`，稳定 bind source
+是其父目录，容器以 `/mnt/toolfs/workspace` 访问。app 为空时省略该层。
+
+ToolFS 不扫描 `/media`。authority provider 在选定 user/agent 主体后，读取
+UserService `GET /v2/permissions/entries?subject=...`，并要求 subject、generation
+与 snapshot 一致。entries 只约束展示范围，不赋予任何文件操作权限：
+
+- `kind=home` 最多一个，公共 `path=/media/Home`、`view_path=/Home`；
+  `default_path=/media/Home/<currentUsername>` 是 UI 默认目标，允许退回集合。
+  ToolFS 不因 default_path 改容器 cwd，也不把集合根打开成全部 Home 的 backing。
+- `kind=storage` 每盘一个 `/media/<storage>`，虚拟路径为 `/<storage>`。
+  分享 `/media/Backup/Projects/A` 仍在 Backup 下逐层导航，不产生顶层分享捷径。
+- `/var/log` 等盘外规则继续存在于 snapshot，但不自动映射进用户视图。
+- 无 read 的祖先只列通向有效 read 后代的合成下一层，不枚举真实目录、不建立
+  protection；有 read 的目录合并真实可读子项与必要导航。更深 allow 不被浅 grant
+  吸收，故 `allow disk → deny private → allow private/shared` 可以穿过必要导航层。
+- Lookup/Readdir/Getattr 与旧 synthetic inode 均检查当前树及实时权限 witness；
+  entries 获取失败保留最后完整结构，但不能保留已被撤销的名称或文件访问。
+- 权限事件和 5 秒 entries 刷新串行执行，同 generation 可增删盘；不修改权限
+  generation，不回退本地扫描。未变 entry/root/protection/inode 复用，同名 backing
+  换对象则退休旧 entry，决策缓存按 entry 身份与相对路径隔离。
+- backend 路径仅按 snapshot 声明的 alias 定位；数据 symlink 使用 fd-relative
+  no-follow 后端，不将 symlink 当普通文件。硬链接身份隔离不在本轮保证范围。
+
+**兼容与验收状态：**必须先部署提供 entries 的 UserService，再部署 ToolFS。
+旧 authority 缺 entries 时初次挂载拒绝，不隐式扩权。Files/UI 本轮未切换。
+UserService 的 inventory adapter、投影、路由与 OpenAPI，以及 ToolFS reader、
+导航树和刷新机制均已落地。两仓共享同内容的公共契约 fixture；
+HTTP 消费、权限边界、导航节点和并发刷新由本地测试覆盖，不能等同设备联调。
+
+securepath 使用固定根 fd 与逐组件 no-follow，根路径在清理前拒绝 `..`/NUL。
+每操作持有独立 fd，关闭和并发替换不会因 fd 复用而转向其他目录。普通文件读写
+与 clone 均拒绝数据 symlink；clone 不支持时在原固定 fd 上 copy，真实 I/O 错误
+保留，失败不按目标名字清理，以免误删并发替换对象。reflink 能力独立保守探测，
+不把 copy 成功当作 reflink。预置硬链接、mount point 与外部移动目录的身份隔离
+不在保证范围内。
+
+`TestMountStorageRootTracksTopologyWithoutDetachingCWD` 使用同一 HTTP authority
+fixture 提供 snapshot/entries，覆盖受限盘导航、Home、同代际盘变化与 cwd/句柄。
+该用例保留在 CI required 集合；无 FUSE 开发环境 SKIP，不等于真实挂载验收通过。

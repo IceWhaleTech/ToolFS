@@ -1,0 +1,48 @@
+{
+  "username": "alice",
+  "storages": [
+    {"name": "备份", "path": "/media/Backup"},
+    {"name": "系统盘", "path": "/media/ZimaOS-HD"}
+  ],
+  "snapshot": {
+    "subject": {"namespace": "user", "id": "10001"},
+    "generation": 42,
+    "path_aliases": [
+      {"canonical": "/media/ZimaOS-HD", "alias": "/DATA"},
+      {"canonical": "/media/ZimaOS-HD/.home", "alias": "/media/Home"}
+    ],
+    "namespaces": {
+      "path": {
+        "allow": [
+          {"object": "/media/ZimaOS-HD/.home/alice", "relations": ["read", "write"]},
+          {"object": "/media/ZimaOS-HD/.home/bob/Photos", "relations": ["read"]},
+          {"object": "/media/Backup/Projects/A", "relations": ["read"]},
+          {"object": "/var/log", "relations": ["read"]}
+        ],
+        "deny": [
+          {"object": "/media/ZimaOS-HD/.home", "relations": ["read", "write", "delete"]}
+        ]
+      }
+    }
+  },
+  "data": {
+    "subject": {"namespace": "user", "id": "10001"},
+    "generation": 42,
+    "entries": [
+      {
+        "kind": "home", "name": "Home",
+        "path": "/media/Home", "view_path": "/Home",
+        "default_path": "/media/Home/alice",
+        "permissions": {"read": false, "write": false, "delete": false},
+        "traverse_only": true
+      },
+      {
+        "kind": "storage", "name": "备份",
+        "path": "/media/Backup", "view_path": "/Backup",
+        "default_path": "/media/Backup",
+        "permissions": {"read": false, "write": false, "delete": false},
+        "traverse_only": true
+      }
+    ]
+  }
+}
