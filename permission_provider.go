@@ -214,7 +214,7 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 		Generation:  uint64(snapshot.Generation),
 		pathAliases: append([]permission.PathAlias(nil), snapshot.PathAliases...),
 		authority: &authorityDecider{
-			client: p.client, subject: subject,
+			client: p.client, subject: subject, agentSubject: app != "",
 		},
 	}, nil
 }
@@ -233,8 +233,9 @@ func (p *AuthorityPermissionProvider) Invalidate(string) {}
 
 // authorityDecider answers per-path questions from the live client cache.
 type authorityDecider struct {
-	client  *permission.Client
-	subject string
+	client       *permission.Client
+	subject      string
+	agentSubject bool
 }
 
 // generation exposes the client's live generation for decision-memo keying.
@@ -246,11 +247,11 @@ func (d *authorityDecider) generation() int64 {
 //
 //	read            → OpRead | OpList
 //	write           → OpCreate | OpModify
-//	delete          → OpDelete, and only when the capability releases it
+//	delete          → OpDelete, only where read and write are also held
 //
-// Narrowing rules carried over from the static path: delete is withheld unless
-// AgentCapabilities.AllowDelete is set, and never released where write is not
-// held — a read-only grant can never be promoted to deletable.
+// Named Agent subjects use the authority's effective relations without a second
+// mount-time delete switch. Direct-user subjects retain the legacy AllowDelete
+// gate. Neither mode can promote a read-only path to deletable.
 //
 // An unknown answer — the client holds no snapshot for this subject, typically
 // the one-round-trip window between a change event and the re-warm — is a
@@ -265,7 +266,7 @@ func (d *authorityDecider) allowedOps(hostPath string, caps AgentCapabilities) A
 
 	if write, _ := d.client.Cached(d.subject, permission.NamespacePath, hostPath, permission.RelWrite); write {
 		ops |= OpCreate | OpModify
-		if caps.AllowDelete {
+		if d.agentSubject || caps.AllowDelete {
 			if del, _ := d.client.Cached(d.subject, permission.NamespacePath, hostPath, permission.RelDelete); del {
 				ops |= OpDelete
 			}

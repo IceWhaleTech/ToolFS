@@ -294,3 +294,124 @@ func fixturePermissionEntries(allow map[string][]string, aliases []permission.Pa
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ViewPath < entries[j].ViewPath })
 	return entries
 }
+
+func TestAgentDeleteRequiresExplicitRelationAndRevokesLive(t *testing.T) {
+	p, a := newAgentScopeProvider(t)
+	a.change(t, p, "agent", func() {
+		a.owner = true
+		a.grants["/media/Docs/A"] = []string{"read", "write"}
+	})
+	access := scopeAccess(t, p, "photos")
+	view, err := BuildInstanceView(&ZimaIdentity{Username: "alice", UserID: 7}, access, AgentCapabilities{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, rel, err := view.Resolve("Docs/A/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/media/Docs/A/file"
+	assertOps := func(want AccessOp) {
+		t.Helper()
+		for _, caps := range []AgentCapabilities{{}, {AllowDelete: false}, {AllowDelete: true}} {
+			if got := access.AllowedOps(path, caps); got != want {
+				t.Errorf("old snapshot with AllowDelete=%v: ops = %s, want %s", caps.AllowDelete, got, want)
+			}
+		}
+		if got := view.allowedOps(entry, rel); got != want {
+			t.Errorf("old view: ops = %s, want %s", got, want)
+		}
+	}
+	rw := OpRead | OpList | OpCreate | OpModify
+	assertOps(rw)
+	changed := make(chan int64, 4)
+	p.OnChange(func(generation int64) { changed <- generation })
+	change := func(mutate func()) {
+		t.Helper()
+		a.change(t, p, "path", mutate)
+		a.mu.Lock()
+		generation := a.generation
+		a.mu.Unlock()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case got := <-changed:
+				if got == generation {
+					return
+				}
+			case <-deadline:
+				t.Fatal("permission generation was not re-warmed")
+			}
+		}
+	}
+	change(func() { a.grants["/media/Docs/A"] = []string{"read", "write", "delete"} })
+	assertOps(rw | OpDelete)
+	change(func() { a.grants["/media/Docs/A"] = []string{"read", "write"} })
+	assertOps(rw)
+	change(func() { a.grants["/media/Docs/A"] = []string{"read", "write", "delete"} })
+	assertOps(rw | OpDelete)
+	change(func() { a.ownerGrants["/media/Docs"] = []string{"read", "write"} })
+	assertOps(rw)
+	change(func() { a.grants = map[string][]string{} })
+	assertOps(0)
+	change(func() {
+		a.ownerGrants["/media/Docs"] = []string{"read", "write", "delete"}
+		a.grants["/media/Docs/A"] = []string{"read", "write", "delete"}
+	})
+	assertOps(rw | OpDelete)
+	change(func() { a.snapshotStatus = http.StatusServiceUnavailable })
+	assertOps(0)
+}
+
+func TestAgentDeleteHonorsEffectiveRelations(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		relations []string
+		deny      []string
+		owner     []string
+		allowed   bool
+	}{
+		{name: "explicit", relations: []string{"read", "write", "delete"}, allowed: true},
+		{name: "read-write", relations: []string{"read", "write"}},
+		{name: "read-delete", relations: []string{"read", "delete"}},
+		{name: "write-delete", relations: []string{"write", "delete"}},
+		{name: "delete-only", relations: []string{"delete"}},
+		{name: "empty"},
+		{name: "delete-deny", relations: []string{"read", "write", "delete"}, deny: []string{"delete"}},
+		{name: "write-deny", relations: []string{"read", "write", "delete"}, deny: []string{"write"}},
+		{name: "read-deny", relations: []string{"read", "write", "delete"}, deny: []string{"read"}},
+		{name: "owner-cap", relations: []string{"read", "write", "delete"}, owner: []string{"read", "write"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, a := newAgentScopeProvider(t)
+			a.mu.Lock()
+			a.owner = true
+			a.grants["/media/Docs"] = tc.relations
+			a.denied["/media/Docs/nested"] = tc.deny
+			if tc.owner != nil {
+				a.ownerGrants["/media/Docs"] = tc.owner
+			}
+			a.mu.Unlock()
+			access := scopeAccess(t, p, "photos")
+			for _, caps := range []AgentCapabilities{{}, {AllowDelete: true}} {
+				if got := access.Allows("/media/Docs/nested/file", OpDelete, caps); got != tc.allowed {
+					t.Errorf("delete with AllowDelete=%v: got %v, want %v", caps.AllowDelete, got, tc.allowed)
+				}
+			}
+			if tc.allowed {
+				view, err := BuildInstanceView(&ZimaIdentity{Username: "alice", UserID: 7}, access,
+					AgentCapabilities{DenyPatterns: []string{"blocked"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				entry, _, err := view.Resolve("Docs")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !view.Allows(entry, "nested/file", OpDelete) || view.Allows(entry, "blocked/file", OpDelete) {
+					t.Fatal("authority deletion bypassed DenyPatterns or lost its explicit relation")
+				}
+			}
+		})
+	}
+}

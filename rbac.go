@@ -35,7 +35,7 @@ const (
 	// OpModify covers overwrite, append, truncate and setattr.
 	OpModify
 	// OpDelete covers unlink, rmdir, rename source and overwrite of an
-	// existing target. Withheld unless AgentCapabilities.AllowDelete is set.
+	// existing target. The authorization source decides whether it is granted.
 	OpDelete
 )
 
@@ -75,9 +75,9 @@ type Grant struct {
 	ReadOnly bool
 }
 
-// Ops returns the operation set this grant confers, before capability narrowing.
-// Note that OpDelete is never conferred here — it is released only by
-// AgentCapabilities, and only for read-write grants.
+// Ops returns the static grant's operation set before capability narrowing.
+// OpDelete is released separately by AllowDelete on read-write static grants;
+// authority-backed snapshots decide operations from their effective relations.
 func (g Grant) Ops() AccessOp {
 	if g.ReadOnly {
 		return OpRead | OpList
@@ -85,13 +85,14 @@ func (g Grant) Ops() AccessOp {
 	return OpRead | OpList | OpCreate | OpModify
 }
 
-// AgentCapabilities narrows what an agent may do inside its granted paths.
-// It can only subtract from what ZimaOS allows, with the single exception of
-// AllowDelete, which restores the delete right ToolFS withholds by default —
-// and even then only on read-write grants.
+// AgentCapabilities configures restrictions inside granted paths. Static and
+// authority direct-user views withhold delete unless AllowDelete releases it on
+// a writable path. Named authority Agents instead require effective
+// read/write/delete relations; AllowDelete does not change their permissions.
 type AgentCapabilities struct {
-	// AllowDelete releases OpDelete on read-write grants. Default false.
-	// A read-only grant can never be promoted to deletable.
+	// AllowDelete releases OpDelete on writable static/direct-user grants.
+	// Default false. Ignored for named authority Agents, whose effective
+	// relations decide deletion. A read-only path is never promoted.
 	AllowDelete bool
 	// AllowCommandExecution gates ToolFS's own command/skill API. It is not a
 	// filesystem permission: a mounted filesystem cannot stop a process from

@@ -95,6 +95,28 @@ clone 固定 fd 降级等边界有测试覆盖。硬链接身份隔离不在保�
 **Linux 真实 FUSE 挂载及设备联调尚未验收；本地测试与交叉构建通过不代表可直接
 发布。Files/UI 尚未切换。**
 
+## Agent 删除授权与热生效
+
+具名 authority Agent 使用 `agent:<uid>:<app>`，删除要求 UserService 对目标路径的有效
+`read`、`write`、`delete` 同时成立。不再受 `-allow-delete` 或请求 `allow_delete` 的二次
+门禁影响；这些字段仅保留 static / 空 app direct-user 的兼容语义，不能为 Agent 补出
+不存在的 delete。仅读写不可删除，owner 上限、显式 deny、DenyPatterns、保留路径和
+回收站/版本保护不变。authority 缓存未知时拒绝，不回退用户授权。
+
+unlink/rmdir 及破坏性 rename 统一检查 `OpDelete`。同目录不覆盖改名保持原写权限语义，
+跨目录移动需源 delete，覆盖需目标 delete，跨 grant 仍返回 `EXDEV`。原来被 capability
+提前拒绝的操作现在统一返回 `EACCES`，只读等其他错误码不变。
+
+授权和撤权沿现有 SSE、rewarm、原地 Reproject 和实时 generation 重新判权，不修改运行中
+的 Caps，不调用 Ensure/Release、不卸载重挂。只撤 delete 后读写保留，清空授权后旧句柄的
+后续 IO 也拒绝。此保证依赖默认零内核缓存；保存成功不是全部消费者的同步确认屏障，
+也不追溯取消已经完成或进行中的 IO。
+
+首次升级仍需独立安排：旧进程没有 FUSE 热接管，替换磁盘二进制不会改变运行中的程序；
+停止旧 daemon 会影响挂载，AM 可能回收缺少挂载的容器。日常授权无需重启容器不代表首次
+部署也能保持旧容器零中断。不得绕过 reaper 或使用 force/lazy unmount 掩盖失效挂载。
+本地代码和 fixture 通过不代表新实现已部署到设备，也不能代替真实 UserService/AM/容器验收。
+
 ## 本地验证
 
 先为私有 Go 依赖配置 Git 读取凭据，并安装 FUSE、Go 1.25、GoReleaser v2、curl 和 binutils：
@@ -113,3 +135,29 @@ sudo bash scripts/smoke-toolfsd-readonly.sh dist
 control API、socket 权限、未绑定账号拒绝和正常退出后的 socket 清理。
 CI 还会在独立挂载命名空间内将 `/mnt` 设为只读、将 `/run` 设为可写，
 不传 `-root` 启动 daemon，验证真实默认路径适用于只读系统镜像。
+
+## 卸载失败诊断与重试
+
+`DELETE /v1/mounts/{agentUserID}?app={app}` 成功仍返回空 `204`；不存在仍返回
+`404` 和原有 `error`，不附加诊断字段。失败返回 `500`，保留原有 `error` 文本并
+增加可选 `stage`、`code`，旧客户端可以忽略这两个字段：
+
+- `stage`：`fuse-unmount` 或 `directory-cleanup`，分别表示内核挂载卸载和卸载后的
+  空目录清理阶段。
+- `code`：`busy`、`permission-denied`、`not-empty`、`invalid-layout` 或 `unknown`。
+  分类来自错误链中的 errno 或明确的目录布局错误类型；错误文字含有 `busy` 等词
+  不构成分类依据。
+
+control socket 仅限 root 访问，兼容保留的 `error` 可能含宿主路径，不能直接转发到
+公开 API 或日志。Agent Management 只消费白名单 `stage/code` 和 HTTP status，
+不回显或记录上游原文；ToolFS 的 Go 错误链仍支持 `errors.Is` / `errors.As`。
+
+FUSE 卸载失败时保留挂载和根句柄；FUSE 已卸载但目录清理失败时保留清理账本，
+后续重试不重复卸载。目录仍只做非递归删除，拒绝符号链接、布局不匹配和意外内容，
+不使用 force/lazy unmount，不删除其他 app 或持久数据。权限事件继续在原挂载和
+原 view 上重投影，不要求回收容器来应用授权。
+
+`e2e/` 的 `AGENT-FS-01` 同时覆盖卸载诊断/重试，以及普通读取与零拷贝读取模式下的
+同挂载授权生命周期和旧句柄撤权。必测项均须连续三次通过，任一 FUSE SKIP 都视为
+场景失败。本机缺少 FUSE 时单元测试通过不能替代 Linux 平台验收。这些诊断用于定位
+后续失败，不代表已确定或修复 248 历史卸载 500 的底层原因。

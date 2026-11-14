@@ -18,6 +18,22 @@
 > - **v7（本版）**：依据 `IceWhaleTech/codex` **源码调查**重写 §14。查明 agent 实为「常驻 Web 服务 + 常驻 app-server」，codex core 内嵌于 app-server 进程（无 per-task 进程边界，`toolfs run -- codex` 模型不适用）；实测 agent 以 **`seluser` 零 capability** 运行（更正 v6「privileged 容器可绕过」的判断）；确立**每用户一个 app-server 实例**为 per-user RBAC 的落地方式（codex 侧零改动，Web 服务侧 40 处调用点改造）；查明 **codex 账号体系与 ZimaOS 独立**，账号绑定成为前置条件。
 > - **v7 修订（2026-07-30）**：编排职责细化为**宿主侧 `agentd` 拉起实例容器 + `toolfsd` 仅负责挂载**（§14.2.2），实例容器降为零特权；实测挂载传播，确立「bind 源取 FUSE 挂载点父目录 + `rslave`」并**推翻此前「无需挂载传播」的判断**（§6.6）；补充**共享目录的跨用户并发语义**，确定 toolfsd 单进程 serve 全部挂载（§6.5）；以最小 FUSE passthrough 实测跨挂载可见性，定位缓存缺口在 negative entry（§2.5⑨）。
 
+### 当前实现的删除授权（2026-11-13）
+
+具名 authority Agent（`app != ""`）按 UserService 有效 `read + write + delete`
+判定删除，不再叠加挂载时固定的 `AllowDelete`。只读、仅读写或缺少 read/write 的
+非标准关系集均不能删除；owner 上限、显式 deny、DenyPatterns 和保护区仍生效。
+static 和空 app 的 authority direct-user 保留原 `AllowDelete` 行为。
+
+`trash` 与破坏性 rename 统一检查 `OpDelete`，不再自行读取 capability；原 capability
+拒绝由 `EPERM` 统一为 `EACCES`，只读 `EROFS`、跨 grant `EXDEV` 不变。同目录且不覆盖
+的 rename 仍不要求 delete，跨目录要求源 delete，覆盖要求目标 delete。
+
+下文旧设计中的全局 capability 交集及「Agent 删除另需 AllowDelete」描述不再适用于
+具名 authority Agent。权限事件使原 view 和挂载重新判权，不要求重启容器；保存响应
+不是消费者完成同步的屏障，也不追溯取消进行中的 IO。旧 daemon 首次升级无 FUSE 热接管，
+不能承诺无中断。当前运行说明及验证边界见 [构建与安装](toolfsd-build.md)。
+
 ---
 
 ## 1. 交付目标与验收标准
@@ -813,7 +829,7 @@ func (fs *ToolFS) MkdirWithSession(ctx context.Context, path string, s *Session)
 | create / mkdir | 目标 parent `OpCreate`，且最终 basename 不存在 |
 | append / overwrite | 目标 `OpModify` + `RequireFresh` + 版本保护 |
 | truncate / setattr shrink | 目标 `OpModify` + `RequireFresh` + 版本保护 |
-| unlink / rmdir | 源 `OpDelete` + `AllowDelete` + `RequireFresh` + 回收站 |
+| unlink / rmdir | 源 `OpDelete` + `RequireFresh` + 回收站；authority Agent 无额外 AllowDelete gate |
 | rename | 源 `OpDelete`；目标 parent `OpCreate`；若覆盖目标，目标还需 `OpDelete`；全部 `RequireFresh` |
 | restore | trash entry 属于当前 UserID；目标 parent `OpCreate`；若覆盖目标，目标需 `OpDelete` 并先保护 |
 
@@ -2200,9 +2216,10 @@ ToolFS 落地后可收窄「agent 能碰哪些目录」，但**无法阻止未�
 
 ### 15.3 保护与恢复的实际语义
 
-**删除**：默认不授予，返回 `EPERM`（语义是「本实例不得删除」而非「路径不可达」）。
-授予 `AllowDelete` 后仍可恢复——条目 rename 进保护区而非 unlink。`rename` 移除了
-源名字，因此要求与删除同一权限。
+**删除**：默认不授予。具名 authority Agent 需要有效 read/write/delete；static 和
+authority direct-user 还需 `AllowDelete`。权限拒绝统一返回 `EACCES`（只读等其他错误码
+保留）。允许删除后仍可恢复，条目 rename 进保护区而非 unlink。跨目录移动需要源 delete，
+覆盖需要目标 delete，同目录不覆盖改名不额外要求 delete。
 
 **版本护栏**三道，缺一不可（`/DATA` 是 ext4、无 reflink，每次留版本都是全量拷贝）：
 

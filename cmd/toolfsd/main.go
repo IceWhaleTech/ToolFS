@@ -32,7 +32,7 @@ func main() {
 		bindingsPath = flag.String("bindings", "", "JSON file mapping agent accounts to ZimaOS users")
 		runtimePath  = flag.String("runtime-path", "/var/run/casaos", "directory where ZimaOS services publish their addresses")
 		cachePath    = flag.String("permission-cache", "/var/lib/casaos/toolfs/permission-cache.json", "where authorization snapshots persist across restarts (empty disables)")
-		allowDelete  = flag.Bool("allow-delete", false, "grant delete on read-write grants (withheld by default)")
+		allowDelete  = flag.Bool("allow-delete", false, "allow deletion on writable static/direct-user grants; named authority Agents use effective read/write/delete")
 		fallbackUser = flag.String("fallback-user", "", "ZimaOS username used for unbound agent accounts (transition mode)")
 		fallbackUID  = flag.Int("fallback-uid", 0, "ZimaOS numeric uid paired with -fallback-user")
 		containerUID = flag.Uint("container-uid", 0, "Unix UID/GID of non-root container consumers (requires a private root-owned mount root)")
@@ -102,7 +102,7 @@ func run(root, socketPath, bindingsPath, runtimePath, cachePath string,
 
 	log.Printf("toolfsd: serving control API on %s, mount root %s", socketPath, root)
 	if !allowDelete {
-		log.Printf("toolfsd: delete is withheld by default; read/write access follows current authorization")
+		log.Printf("toolfsd: named authority Agents require effective read/write/delete; static/direct-user delete is withheld by default")
 	}
 
 	serveErr := make(chan error, 1)

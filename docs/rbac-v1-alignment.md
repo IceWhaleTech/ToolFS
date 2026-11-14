@@ -8,6 +8,18 @@
 
 ---
 
+## 当前删除授权（2026-11-13）
+
+具名 authority Agent 的删除只依据 UserService 有效 `read + write + delete`，不再额外
+要求 `AllowDelete`。owner 是实时上限而非授权来源；默认无目录权限，只有 read/write
+不能删除。static 与空 app 的 authority direct-user 保留旧 capability 保护。
+
+这一决定替代下文关于「Agent 删另需 AllowDelete」的早期结论，不全局删除兼容字段。
+FUSE 删除和破坏性 rename 统一查询 `OpDelete`，原 capability 拒绝统一为 `EACCES`。
+授权升降通过原事件与重投影在同一挂载生效，不新增 AM/Folio 开关同步或实例回收。
+首次替换旧 ToolFS 进程不属于权限热更新保证，需独立维护安排。具体边界见
+[构建与安装](toolfsd-build.md)。下文历史推导保留，不作为新实现的额外门禁。
+
 ## 0. 实现后的变化（2026-08-14）
 
 授权已在 UserService 落地，实现过程推翻了本文若干处判断。**下文各节保留原样**，因为它们记录了一次真实的判断变更；本节是与实现不一致处的清单。权威说明见 UserService 仓库的 [`docs/rbac-design.md`](../../ZimaOS-UserService/docs/rbac-design.md)。

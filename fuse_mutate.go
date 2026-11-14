@@ -11,9 +11,9 @@ package toolfs
 //
 // Two rules shape the semantics:
 //
-//   - Deletion is withheld unless the instance holds AllowDelete. ZimaOS only
-//     distinguishes read-only from read-write, so without this split "writable"
-//     would imply "deletable".
+//   - Deletion requires OpDelete from the view's authorization policy. Named
+//     authority Agents need effective read/write/delete; static and direct-user
+//     views retain their AllowDelete gate. Writable never implies deletable.
 //   - When deletion *is* permitted, it is still recoverable: the entry is
 //     renamed into the grant's state area rather than unlinked.
 
@@ -136,11 +136,6 @@ func (d *instanceDir) trash(childRel string) syscall.Errno {
 	if !d.writable() {
 		return syscall.EROFS
 	}
-	// Delete is withheld by default. Reporting EPERM rather than EACCES says
-	// "this instance may not delete", not "you cannot reach this path".
-	if !d.view.Caps.AllowDelete {
-		return syscall.EPERM
-	}
 	if !d.view.Allows(d.entry, childRel, OpDelete) {
 		return syscall.EACCES
 	}
@@ -180,9 +175,6 @@ func (d *instanceDir) Rename(ctx context.Context, name string, newParent gofs.In
 	_, statErr := d.entry.root.Stat(newRel)
 	overwrite := statErr == nil
 	need := renameRequirement(d.rel == target.rel, overwrite)
-	if (need.DeleteSource || need.DeleteTarget) && !d.view.Caps.AllowDelete {
-		return syscall.EPERM
-	}
 	if need.DeleteSource && !d.view.Allows(d.entry, oldRel, OpDelete) {
 		return syscall.EACCES
 	}
