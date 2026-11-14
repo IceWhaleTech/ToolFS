@@ -112,6 +112,8 @@ type mountRequest struct {
 
 type errorResponse struct {
 	Error string `json:"error"`
+	Stage string `json:"stage,omitempty"`
+	Code  string `json:"code,omitempty"`
 }
 
 func (c *ControlServer) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -188,7 +190,8 @@ func (c *ControlServer) handleUnmount(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrMountNotFound):
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: err.Error()})
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		stage, code := unmountDiagnostics(err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error(), Stage: stage, Code: code})
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}

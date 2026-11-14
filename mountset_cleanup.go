@@ -17,7 +17,7 @@ type mountLayout struct {
 
 func mountLayoutFor(root string, identity *ZimaIdentity, app string) (mountLayout, error) {
 	if identity == nil || (app != "" && (app == "." || app == ".." || filepath.Base(app) != app)) {
-		return mountLayout{}, fmt.Errorf("toolfs: invalid mount directory identity")
+		return mountLayout{}, mountLayoutError("toolfs: invalid mount directory identity")
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -127,7 +127,7 @@ func (s *MountSet) removeMountDirectories(live *liveMount) error {
 		return err
 	}
 	if actualBind != layout.bind || actualPoint != layout.point {
-		return fmt.Errorf("toolfs: mount cleanup path is outside the instance layout")
+		return mountLayoutError("toolfs: mount cleanup path is outside the instance layout")
 	}
 	for _, path := range layout.paths() {
 		info, err := os.Lstat(path)
@@ -138,7 +138,7 @@ func (s *MountSet) removeMountDirectories(live *liveMount) error {
 			return err
 		}
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("toolfs: mount cleanup path is not a real directory: %s", path)
+			return mountLayoutError(fmt.Sprintf("toolfs: mount cleanup path is not a real directory: %s", path))
 		}
 	}
 	if err := os.Remove(layout.point); err != nil && !errors.Is(err, os.ErrNotExist) {

@@ -258,12 +258,12 @@ func (s *MountSet) Unmount(agentUserID, app string) error {
 	}
 	if !live.unmounted {
 		if err := live.handle.Unmount(); err != nil {
-			return err
+			return &unmountError{stage: "fuse-unmount", err: err}
 		}
 		live.unmounted = true
 	}
 	if err := s.removeMountDirectories(live); err != nil {
-		return fmt.Errorf("toolfs: clean unmounted instance: %w", err)
+		return &unmountError{stage: "directory-cleanup", err: fmt.Errorf("toolfs: clean unmounted instance: %w", err)}
 	}
 	delete(s.mounts, key)
 	return nil
