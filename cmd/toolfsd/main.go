@@ -25,7 +25,16 @@ import (
 	"github.com/IceWhaleTech/toolfs"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 func main() {
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "print version information and exit")
+	flag.BoolVar(&showVersion, "v", false, "print version information and exit")
 	var (
 		root         = flag.String("root", "/run/toolfs/mounts", "directory under which per-user mount points are created")
 		socketPath   = flag.String("socket", "/run/toolfs/toolfsd.sock", "unix socket for the control API")
@@ -39,6 +48,11 @@ func main() {
 		debug        = flag.Bool("debug", false, "enable FUSE protocol logging")
 	)
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("zimaos-toolfsd %s (commit: %s, built: %s)\n", version, commit, date)
+		return
+	}
 
 	if *containerUID > 2147483647 {
 		log.Fatal("toolfsd: container-uid is outside the supported UID range")

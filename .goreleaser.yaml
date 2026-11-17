@@ -12,7 +12,7 @@ builds:
       - netgo
       - osusergo
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }} -X main.date={{ .Date }}
     goos:
       - linux
     goarch:
