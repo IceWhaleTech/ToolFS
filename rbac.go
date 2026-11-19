@@ -17,7 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/IceWhaleTech/ZimaOS-Common/permission"
+	"github.com/IceWhaleTech/ZimaOS-Common/v2/permission"
 )
 
 // AccessOp is a bitmask of the actions ToolFS distinguishes for access control.

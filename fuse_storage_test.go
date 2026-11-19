@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IceWhaleTech/ZimaOS-Common/permission"
+	"github.com/IceWhaleTech/ZimaOS-Common/v2/permission"
 )
 
 func TestMountStorageRootTracksTopologyWithoutDetachingCWD(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/IceWhaleTech/ZimaOS-Common/permission"
+	"github.com/IceWhaleTech/ZimaOS-Common/v2/permission"
 )
 
 // PermissionEntry is navigation metadata, never a grant. Paths use the public

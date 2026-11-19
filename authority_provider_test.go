@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IceWhaleTech/ZimaOS-Common/permission"
+	"github.com/IceWhaleTech/ZimaOS-Common/v2/permission"
 )
 
 // fakeAuthority serves /v2/permissions/snapshot and /events from mutable state.

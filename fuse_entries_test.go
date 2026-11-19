@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/IceWhaleTech/ZimaOS-Common/permission"
+	"github.com/IceWhaleTech/ZimaOS-Common/v2/permission"
 
 	gofs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"

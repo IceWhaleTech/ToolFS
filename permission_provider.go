@@ -21,7 +21,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/IceWhaleTech/ZimaOS-Common/permission"
+	"github.com/IceWhaleTech/ZimaOS-Common/v2/permission"
 )
 
 // ErrNoGrants indicates the user holds no usable authorization at all.
