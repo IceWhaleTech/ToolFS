@@ -93,7 +93,7 @@ func StartAuthorityPermissionProvider(ctx context.Context, runtimePath, cachePat
 	provider := &AuthorityPermissionProvider{served: make(map[string]*ZimaIdentity), entries: newEntriesReader(permission.AddressIn(runtimePath))}
 
 	options := []permission.Option{
-		permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceAgent),
+		permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceAgent, permission.NamespaceApplication),
 		permission.WithChangeHandler(provider.handleChange),
 	}
 	if cachePath != "" {
@@ -162,7 +162,15 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 	}
 	subject := permission.NamespaceUser + ":" + itoa(identity.UserID)
 	if app != "" {
-		subject = permission.NamespaceAgent + ":" + itoa(identity.UserID) + ":" + app
+		binding, err := p.client.ApplicationContext(ctx, itoa(identity.UserID), app)
+		if err == nil {
+			subject = binding.PermissionSubject
+		} else if errors.Is(err, permission.ErrApplicationContextUnsupported) {
+			// Old servers expose the same narrow legacy policy, never user inheritance.
+			subject = permission.NamespaceAgent + ":" + itoa(identity.UserID) + ":" + app
+		} else {
+			return nil, err
+		}
 	}
 
 	snapshot, err := p.client.Snapshot(ctx, subject)

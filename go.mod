@@ -7,7 +7,7 @@ require github.com/hanwen/go-fuse/v2 v2.9.0
 require golang.org/x/sys v0.36.0
 
 require (
-	github.com/IceWhaleTech/ZimaOS-Common v1.8.1-alpha1
+	github.com/IceWhaleTech/ZimaOS-Common v1.8.1-alpha1.0.20261119071457-72a19f9fe92a
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/labstack/echo-jwt/v4 v4.3.1 // indirect
