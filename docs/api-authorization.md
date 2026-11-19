@@ -1,9 +1,8 @@
 # User application permission context
 
-App mounts resolve their permission subject through the authority's
-`/v2/permissions/application-context`, then consume matching snapshot/entries.
-The authority gates inactive API grants and publishes application/agent/path
-generation changes; mounted decisions remain live. No user policy fallback is
-permitted. Only old authorities with an unknown context route may use the
-previous narrow agent subject. Explicit unknown-app responses fail closed.
-The FUSE core, path spelling and capability narrowing remain unchanged.
+App mounts resolve application:<user_id>:<app> through the authority application-context endpoint,
+then consume matching snapshot/entries. Missing endpoints, unknown applications and malformed
+bindings fail closed. No Agent or user policy fallback is supported. The authority gates
+inactive grants and publishes application/path generations for live mounted revocation.
+The one-time authority migration retains former Agent ACLs under application subjects.
+The FUSE core, path spelling and runtime capability narrowing remain unchanged.

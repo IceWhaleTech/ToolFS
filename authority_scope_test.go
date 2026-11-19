@@ -50,7 +50,7 @@ func (a *agentScopeAuthority) snapshot(subject string) *permission.Snapshot {
 	}
 	if subject == "user:7" {
 		path = owner.Namespaces["path"]
-	} else if subject == "agent:7:photos" && a.owner {
+	} else if subject == "application:7:photos" && a.owner {
 		for object, relations := range a.grants {
 			var effective []string
 			for _, relation := range relations {
@@ -78,6 +78,10 @@ func newAgentScopeProvider(t *testing.T) (*AuthorityPermissionProvider, *agentSc
 		events:      make(chan agentScopeEvent, 16),
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/permissions/application-context", func(w http.ResponseWriter, r *http.Request) {
+		user, app := r.URL.Query().Get("user_id"), r.URL.Query().Get("application_id")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"owner_user_id": json.Number(user), "application_id": app, "permission_subject": "application:" + user + ":" + app, "active": true}})
+	})
 	mux.HandleFunc("/v2/permissions/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -135,7 +139,7 @@ func newAgentScopeProvider(t *testing.T) (*AuthorityPermissionProvider, *agentSc
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	var p *AuthorityPermissionProvider
-	client := permission.New(func() string { return server.URL }, permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceAgent), permission.WithChangeHandler(func(g int64) { p.handleChange(g) }))
+	client := permission.New(func() string { return server.URL }, permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceApplication), permission.WithChangeHandler(func(g int64) { p.handleChange(g) }))
 	p = NewAuthorityPermissionProvider(client, newEntriesReader(func() string { return server.URL }))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

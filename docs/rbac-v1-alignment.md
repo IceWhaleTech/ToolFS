@@ -36,7 +36,7 @@ FUSE 删除和破坏性 rename 统一查询 `OpDelete`，原 capability 拒绝�
 
 **新增 `role` 与 `group` 两个结构性命名空间。** 「Owner」不是账号上的字段，也不是求值路径上的判断，而是 `role:owner#member` 这个主体集合：授权写在角色上，账号成为成员。改一次角色所有 Owner 一起变；撤销成员关系那个账号立刻一无所有。组是同一个机制，模型已支持（含嵌套与环检测），尚无管理接口。
 
-**Owner 的路径默认值是 Files 暴露的数据根**——`/media` 与 `/var/log`，不是整个文件系统。这是 ToolFS 挂载 Owner 视图时会看到的范围。`/DATA` 不在其中：Files 会先把它改写成 `/media/<默认存储>`。
+**Owner 的路径默认值是 Files 暴露的数据根**——`/media`，不是整个文件系统。这是 ToolFS 挂载 Owner 视图时会看到的范围。`/DATA` 不在其中：Files 会先把它改写成 `/media/<默认存储>`。
 
 **「谁能改权限」也成了一条权限**（`system:permission.manage`），不再是 handler 里的 `role == "admin"`。可以单独授给只管权限的人，也可以从不该再管的人手里收回。
 

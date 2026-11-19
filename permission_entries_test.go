@@ -139,7 +139,7 @@ func TestEntriesRejectMismatchesAndMalformedMappings(t *testing.T) {
 
 func TestEntriesReaderHTTPUnixAndFailures(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v2/permissions/entries" || r.URL.Query().Get("subject") != "agent:7:photos" {
+		if r.URL.Path != "/v2/permissions/entries" || r.URL.Query().Get("subject") != "application:7:photos" {
 			t.Errorf("request: %s", r.URL)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": PermissionEntries{Subject: permission.Subject{Namespace: "agent", ID: "7:photos"}, Generation: 1, Entries: []PermissionEntry{}}})
@@ -160,7 +160,7 @@ func TestEntriesReaderHTTPUnixAndFailures(t *testing.T) {
 	defer unixServer.Close()
 	go func() { _ = unixServer.Serve(listener) }()
 	for _, address := range []string{server.URL, strings.TrimPrefix(server.URL, "http://"), socket, "unix://" + socket} {
-		if _, err := newEntriesReader(func() string { return address }).Entries(t.Context(), "agent:7:photos"); err != nil {
+		if _, err := newEntriesReader(func() string { return address }).Entries(t.Context(), "application:7:photos"); err != nil {
 			t.Errorf("transport %s: %v", address, err)
 		}
 	}

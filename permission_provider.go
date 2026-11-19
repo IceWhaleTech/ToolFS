@@ -93,7 +93,7 @@ func StartAuthorityPermissionProvider(ctx context.Context, runtimePath, cachePat
 	provider := &AuthorityPermissionProvider{served: make(map[string]*ZimaIdentity), entries: newEntriesReader(permission.AddressIn(runtimePath))}
 
 	options := []permission.Option{
-		permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceAgent, permission.NamespaceApplication),
+		permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceApplication),
 		permission.WithChangeHandler(provider.handleChange),
 	}
 	if cachePath != "" {
@@ -153,7 +153,7 @@ const homeEntryName = "Home"
 
 // GrantsFor projects the authority's snapshot for one identity.
 //
-// An app always uses its agent subject, including before its first grant and
+// An app always uses its registered application subject, including before its first grant and
 // after every declaration is removed. Ownership caps permissions; it does not
 // confer the user's view. An empty app is the trusted direct-user mode.
 func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error) {
@@ -165,9 +165,7 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 		binding, err := p.client.ApplicationContext(ctx, itoa(identity.UserID), app)
 		if err == nil {
 			subject = binding.PermissionSubject
-		} else if errors.Is(err, permission.ErrApplicationContextUnsupported) {
-			// Old servers expose the same narrow legacy policy, never user inheritance.
-			subject = permission.NamespaceAgent + ":" + itoa(identity.UserID) + ":" + app
+
 		} else {
 			return nil, err
 		}
@@ -257,7 +255,7 @@ func (d *authorityDecider) generation() int64 {
 //	write           → OpCreate | OpModify
 //	delete          → OpDelete, only where read and write are also held
 //
-// Named Agent subjects use the authority's effective relations without a second
+// Registered application subjects use the authority's effective relations without a second
 // mount-time delete switch. Direct-user subjects retain the legacy AllowDelete
 // gate. Neither mode can promote a read-only path to deletable.
 //

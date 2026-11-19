@@ -1,5 +1,5 @@
-github.com/IceWhaleTech/ZimaOS-Common v1.8.1-alpha1.0.20261119071457-72a19f9fe92a h1:NMlnFdW9s87lw+jY3OHSgaiYqwO9YfAeji/SThtdxBU=
-github.com/IceWhaleTech/ZimaOS-Common v1.8.1-alpha1.0.20261119071457-72a19f9fe92a/go.mod h1:jOSW3wRx2Y55Dvv2J9CqZF3QeAmS0LzDawOTEw8EJ0s=
+github.com/IceWhaleTech/ZimaOS-Common v1.8.1-alpha1.0.20261119085429-e5e6a37fd7b2 h1:Xxf9uO7Jh8v/FWJkwk3qg1S2Z/mEk+eWrcxoFZWjNZE=
+github.com/IceWhaleTech/ZimaOS-Common v1.8.1-alpha1.0.20261119085429-e5e6a37fd7b2/go.mod h1:jOSW3wRx2Y55Dvv2J9CqZF3QeAmS0LzDawOTEw8EJ0s=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/golang-jwt/jwt/v4 v4.5.2 h1:YtQM7lnr8iZ+j5q71MGKkNw9Mn7AjHM68uc9g5fXeUI=
