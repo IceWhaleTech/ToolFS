@@ -1,13 +1,13 @@
 module github.com/IceWhaleTech/toolfs
 
-go 1.25
+go 1.27.4
 
 require github.com/hanwen/go-fuse/v2 v2.9.0
 
 require golang.org/x/sys v0.36.0
 
 require (
-	github.com/IceWhaleTech/ZimaOS-Common/v2 v2.0.0-alpha1
+	github.com/IceWhaleTech/ZimaOS-Common/v2 v2.0.0-alpha3
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/labstack/echo-jwt/v4 v4.3.1 // indirect

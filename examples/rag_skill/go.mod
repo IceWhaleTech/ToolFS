@@ -1,6 +1,6 @@
 module github.com/IceWhaleTech/toolfs/examples/rag_skill
 
-go 1.21
+go 1.27.4
 
 replace github.com/IceWhaleTech/toolfs => ../../
 
