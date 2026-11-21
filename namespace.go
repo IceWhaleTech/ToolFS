@@ -443,7 +443,7 @@ func (v *InstanceView) allowedOps(entry *NamespaceEntry, rel string) AccessOp {
 	access := v.Access
 	v.mu.RUnlock()
 
-	generation := access.CurrentGeneration()
+	generation := access.decisionRevision()
 
 	if entry.retired.Load() {
 		return 0

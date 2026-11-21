@@ -24,14 +24,15 @@ import (
 
 // fakeAuthority serves /v2/permissions/snapshot and /events from mutable state.
 type fakeAuthority struct {
-	mu            sync.Mutex
-	generation    int64
-	allow         map[string][]string // object → relations
-	deny          map[string][]string
-	events        chan int64
-	pathAliases   []permission.PathAlias
-	entries       []PermissionEntry
-	entriesStatus int
+	mu             sync.Mutex
+	generation     int64
+	allow          map[string][]string // object → relations
+	deny           map[string][]string
+	events         chan int64
+	pathAliases    []permission.PathAlias
+	entries        []PermissionEntry
+	entriesStatus  int
+	snapshotStatus int
 }
 
 func newFakeAuthority() *fakeAuthority {
@@ -50,6 +51,10 @@ func (a *fakeAuthority) serve(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/v2/permissions/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
+		if a.snapshotStatus != 0 {
+			http.Error(w, "unavailable", a.snapshotStatus)
+			return
+		}
 
 		type grant struct {
 			Object    string   `json:"object"`

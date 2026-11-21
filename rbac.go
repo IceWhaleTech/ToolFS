@@ -131,12 +131,13 @@ type AccessSnapshot struct {
 	entries     []PermissionEntry
 }
 
-// CurrentGeneration is what decision memos must key on.
+// CurrentGeneration reports the authority generation (or static build version).
 //
 // For a static snapshot it is the build-time generation. For an
 // authority-backed one it is the client's live generation, which moves the
-// instant a change event arrives — that is what invalidates the per-view
-// decision cache without anyone rebuilding the view.
+// instant a change event arrives. Decision memos additionally use the local
+// cache revision, so a failed refresh at the same generation cannot reuse an
+// old allow decision.
 func (s *AccessSnapshot) CurrentGeneration() uint64 {
 	if s == nil {
 		return 0
@@ -145,6 +146,13 @@ func (s *AccessSnapshot) CurrentGeneration() uint64 {
 		return uint64(s.authority.generation())
 	}
 	return s.Generation
+}
+
+func (s *AccessSnapshot) decisionRevision() uint64 {
+	if s != nil && s.authority != nil {
+		return s.authority.client.CacheRevision()
+	}
+	return s.CurrentGeneration()
 }
 
 // NewAccessSnapshot normalizes and indexes a set of grants.

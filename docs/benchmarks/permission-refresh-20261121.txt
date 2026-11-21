@@ -1,0 +1,45 @@
+Go 1.27.4; Linux amd64; AMD EPYC 9275F; GOMAXPROCS=4; benchtime=250ms; count=5
+
+# toolfs-before-hot
+goos: linux
+goarch: amd64
+pkg: github.com/IceWhaleTech/toolfs
+cpu: AMD EPYC 9275F 24-Core Processor
+BenchmarkLiveDecisionCache-4   	 9422058	        31.71 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+BenchmarkLiveDecisionCache-4   	 9444033	        31.64 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+BenchmarkLiveDecisionCache-4   	 9476599	        31.67 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+BenchmarkLiveDecisionCache-4   	 9449034	        31.67 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+BenchmarkLiveDecisionCache-4   	 9466946	        31.66 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/IceWhaleTech/toolfs	1.685s
+
+# toolfs-after-hot
+goos: linux
+goarch: amd64
+pkg: github.com/IceWhaleTech/toolfs
+cpu: AMD EPYC 9275F 24-Core Processor
+BenchmarkLiveDecisionCache-4   	 9371238	        31.84 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+BenchmarkLiveDecisionCache-4   	 9399992	        31.85 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+BenchmarkLiveDecisionCache-4   	 9398623	        31.88 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+BenchmarkLiveDecisionCache-4   	 9408810	        31.89 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+BenchmarkLiveDecisionCache-4   	 9370268	        31.83 ns/op	         0 HTTP/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/IceWhaleTech/toolfs	1.686s
+
+# toolfs-generation-bench
+goos: linux
+goarch: amd64
+pkg: github.com/IceWhaleTech/toolfs
+cpu: AMD EPYC 9275F 24-Core Processor
+BenchmarkGlobalGenerationRewarm/subjects=1-4         	    3159	     85612 ns/op	         1.000 HTTP/event	    9475 B/op	     118 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=1-4         	    3618	     70325 ns/op	         1.000 HTTP/event	    9485 B/op	     119 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=1-4         	    3252	     85784 ns/op	         1.000 HTTP/event	    9475 B/op	     118 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=1-4         	    3994	     90286 ns/op	         1.000 HTTP/event	    9465 B/op	     118 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=1-4         	    3688	     91648 ns/op	         1.000 HTTP/event	    9475 B/op	     118 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=8-4         	     494	    591293 ns/op	         8.000 HTTP/event	   73265 B/op	     903 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=8-4         	     522	    520427 ns/op	         8.000 HTTP/event	   73266 B/op	     903 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=8-4         	     526	    564983 ns/op	         8.000 HTTP/event	   73244 B/op	     903 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=8-4         	     482	    543326 ns/op	         8.000 HTTP/event	   73219 B/op	     903 allocs/op
+BenchmarkGlobalGenerationRewarm/subjects=8-4         	     534	    566881 ns/op	         8.000 HTTP/event	   73250 B/op	     903 allocs/op
+PASS
+ok  	github.com/IceWhaleTech/toolfs	3.567s

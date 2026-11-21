@@ -207,7 +207,11 @@ func TestEntriesProviderPairsSelectedSubjectAndGeneration(t *testing.T) {
 			if _, err := p.GrantsFor(t.Context(), &ZimaIdentity{Username: "alice", UserID: 7}, ""); err == nil {
 				t.Fatal("mismatched response published")
 			}
-			if requests != 3 {
+			want := 1
+			if mismatch == "generation" {
+				want = 3
+			}
+			if requests != want {
 				t.Fatalf("unbounded/absent retry: %d", requests)
 			}
 		})

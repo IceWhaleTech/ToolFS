@@ -82,9 +82,9 @@ func NewAuthorityPermissionProvider(client *permission.Client, readers ...Entrie
 }
 
 // StartAuthorityPermissionProvider builds the client, loads the disk cache and
-// starts following the authority's event stream. Path and agent changes both
-// matter: declaring or removing an agent owner can narrow its view without
-// changing any path grant.
+// starts following all authority generations. Snapshots and entries share a
+// device-wide generation, and effective path rights can depend on membership
+// and ownership edges outside the path namespace.
 //
 // runtimePath is where the authority publishes its address (the same directory
 // every ZimaOS service consults). cachePath persists snapshots so a restart
@@ -93,7 +93,6 @@ func StartAuthorityPermissionProvider(ctx context.Context, runtimePath, cachePat
 	provider := &AuthorityPermissionProvider{served: make(map[string]*ZimaIdentity), entries: newEntriesReader(permission.AddressIn(runtimePath))}
 
 	options := []permission.Option{
-		permission.WithWatchNamespaces(permission.NamespacePath, permission.NamespaceApplication),
 		permission.WithChangeHandler(provider.handleChange),
 	}
 	if cachePath != "" {
@@ -189,9 +188,12 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 		if err = validateEntries(entries, snapshot, subject); err == nil {
 			break
 		}
-		// Snapshot's public client is event-driven. A cached generation that cannot
-		// be paired is refused, not relabelled; the next event/refresh retries it.
-		snapshot, err = p.client.Snapshot(ctx, subject)
+		// A mismatched subject is never repaired into a different identity.
+		// Generation drift can recover, but a cached read is not a retry.
+		if !errors.Is(err, errEntriesGenerationMismatch) || attempt == 2 {
+			return nil, err
+		}
+		snapshot, err = p.client.RefreshSnapshot(ctx, subject)
 		if err != nil {
 			return nil, err
 		}
@@ -225,9 +227,8 @@ func (p *AuthorityPermissionProvider) GrantsFor(ctx context.Context, identity *Z
 	}, nil
 }
 
-// FreshGrantsFor is GrantsFor: freshness is event-driven here, so the cached
-// answer is already as fresh as a forced round trip would be — the cache is
-// emptied the moment the authority announces a change.
+// FreshGrantsFor uses the same event-driven projection and bounded generation
+// repair as GrantsFor. File-operation decisions remain local cached reads.
 func (p *AuthorityPermissionProvider) FreshGrantsFor(ctx context.Context, identity *ZimaIdentity, app string) (*AccessSnapshot, error) {
 	return p.GrantsFor(ctx, identity, app)
 }

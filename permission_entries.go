@@ -113,9 +113,14 @@ func (r *authorityEntriesReader) Entries(ctx context.Context, subject string) (*
 	return envelope.Data, nil
 }
 
+var errEntriesGenerationMismatch = errors.New("toolfs: entries generation differs from snapshot")
+
 func validateEntries(entries *PermissionEntries, snapshot *permission.Snapshot, subject string) error {
-	if entries == nil || snapshot == nil || entries.Subject.String() != subject || snapshot.Subject != entries.Subject || entries.Generation != snapshot.Generation {
-		return errors.New("toolfs: entries subject or generation differs from snapshot")
+	if entries == nil || snapshot == nil || entries.Subject.String() != subject || snapshot.Subject != entries.Subject {
+		return errors.New("toolfs: entries subject differs from snapshot")
+	}
+	if entries.Generation != snapshot.Generation {
+		return fmt.Errorf("%w (snapshot=%d entries=%d)", errEntriesGenerationMismatch, snapshot.Generation, entries.Generation)
 	}
 	seen := map[string]bool{}
 	for _, entry := range entries.Entries {
